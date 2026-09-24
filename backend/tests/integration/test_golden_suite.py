@@ -216,3 +216,48 @@ def test_execution_mode_isolation(browser_context):
     evaluator = CandidateEvaluator(browser_context)
     result = evaluator.evaluate_submission(html, '', js, assertions)
     assert result.total_points == 30
+def test_dom_presence_expectation(browser_context):
+    html = '''
+        <div id="exists">I exist</div>
+    '''
+    js = ''
+    
+    assertions = [
+        # Expected Present, Element Exists -> PASS
+        Assertion(
+            id='a1', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
+            trigger_selector='', check_selector='#exists',
+            expected_value='present', points=10, group_id='g1', execution_mode='isolated'
+        ),
+        # Expected Present, Element Missing -> FAIL
+        Assertion(
+            id='a2', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
+            trigger_selector='', check_selector='#missing',
+            expected_value='present', points=10, group_id='g2', execution_mode='isolated'
+        ),
+        # Expected Absent, Element Missing -> PASS
+        Assertion(
+            id='a3', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
+            trigger_selector='', check_selector='#missing',
+            expected_value='absent', points=10, group_id='g3', execution_mode='isolated'
+        ),
+        # Expected Absent, Element Exists -> FAIL
+        Assertion(
+            id='a4', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
+            trigger_selector='', check_selector='#exists',
+            expected_value='absent', points=10, group_id='g4', execution_mode='isolated'
+        )
+    ]
+    
+    evaluator = CandidateEvaluator(browser_context)
+    result = evaluator.evaluate_submission(html, '', js, assertions)
+    
+    # We should have 20 points (10 for a1, 10 for a3)
+    assert result.total_points == 20
+    
+    # Let's also check the exact statuses
+    status_map = {ar.assertion_id: ar.status for ar in result.assertion_results}
+    assert status_map['a1'] == 'PASS'
+    assert status_map['a2'] == 'FAIL'
+    assert status_map['a3'] == 'PASS'
+    assert status_map['a4'] == 'FAIL'

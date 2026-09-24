@@ -284,10 +284,11 @@ class CandidateEvaluator:
         try:
             if assertion.check_type in (CheckType.DOM_PRESENCE, CheckType.FUNCTION_PRESENCE):
                 actual = self._read_actual(assertion)
-                passed = bool(actual) == (str(assertion.expected_value).lower() == "true" or str(assertion.expected_value).lower() == "element should exist" or not assertion.expected_value)
-                # Note: original code checks == "true", but in DB we use descriptive strings like "Element should exist"
-                if assertion.check_type == CheckType.DOM_PRESENCE and actual is True:
-                    passed = True
+                expected_str = str(assertion.expected_value).lower().strip() if assertion.expected_value else "present"
+                # Support legacy "true"/"false" as well as "present"/"absent"
+                expected_present = expected_str in ("present", "true", "element should exist")
+                
+                passed = bool(actual) == expected_present
             else:
                 actual = self._poll_until_match(assertion)
                 if assertion.check_type == CheckType.COMPUTED_STYLE and assertion.property_name:

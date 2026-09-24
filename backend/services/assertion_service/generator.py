@@ -10,7 +10,7 @@ PROMPT = """You are a test automation engineer generating UI assertions for an H
 Your task: Generate a complete, ORDERED set of UI assertions that cover the full interaction sequence:
   1. Initial page load state
   2. Each intermediate user interaction step (clicks, inputs, changes, hovers)
-  3. Every distinct behavior stated in the description â€” including style states, pseudo-states (:hover, :disabled), and timed/delayed state changes
+  3. Every distinct behavior stated in the description — including style states, pseudo-states (:hover, :disabled), and timed/delayed state changes
   4. The final expected visual/DOM state after all interactions
 
 Before generating assertions, silently enumerate every distinct testable requirement in the description as a checklist (one line per requirement). Then generate at least one assertion per checklist item.
@@ -19,10 +19,10 @@ CRITICAL SCHEMA RULES (DO NOT IGNORE):
 1. DISTINCT TARGETS: You must explicitly define BOTH the `trigger_selector` (the interactive element) AND the `check_selector` (the element to validate).
 2. EXECUTION MODE & GROUPING (CRITICAL):
    - If checking an element's state or interactivity depends on prior user actions (e.g., a button that's only enabled once other fields are filled, or a UI state reachable only after a click), you MUST chain ALL assertions needed to reach and verify that state into the SAME `group_id`, ordered by `sequence_order`.
-   - Each group starts from a blank page reload â€” nothing from outside the group carries over.
+   - Each group starts from a blank page reload — nothing from outside the group carries over.
    - Independent, order-agnostic checks (e.g., verifying initial page load structure) should omit `group_id` (null) and use `execution_mode: isolated`.
    - A `hover` or `click` trigger assertion that targets an element gated by other input state MUST be preceded, within the SAME group, by the setup steps (`input`/`change` assertions) that satisfy that gate.
-3. EXPECTED RESULT: `computed_style` must be `property: value`. `attribute` must be `attribute=value`.
+3. EXPECTED RESULT: `computed_style` must be `property: value`. `attribute` must be `attribute=value`. `dom_presence` must be `present` or `absent`.
 
 TESTING BEHAVIOR RULES:
 - Prefer IDs like #colorBtn, #shape. Never use class names unless the question requires them.
@@ -64,7 +64,7 @@ Respond ONLY with this JSON object:
       "trigger_selector": "CSS selector",
       "check_type": "dom_presence" | "computed_style" | "text_content" | "attribute" | "visual_region",
       "check_selector": "CSS selector",
-      "expected_result": "property: value or attribute=value",
+      "expected_result": "property: value, attribute=value, or present/absent",
       "wait_ms": 0,
       "points": 10,
       "is_sample": false,
