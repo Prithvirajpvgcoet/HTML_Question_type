@@ -1,0 +1,19 @@
+# Prompt Registry
+# Every entry maps a prompt name to its current version file.
+# assertion_set_version is bumped whenever a prompt version here changes.
+
+validation:
+  version: "v1"
+  file: "validation/v1.md"
+
+generation:
+  version: "v1"
+  file: "generation/v1.md"
+
+llm_verification:
+  version: "v1"
+  file: "llm_verification/v1.md"
+
+feedback:
+  version: "v1"
+  file: "feedback/v1.md"

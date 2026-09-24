@@ -1,0 +1,25 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: imocha_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: imocha
+      POSTGRES_PASSWORD: imocha_pass
+      POSTGRES_DB: imocha_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis
+    container_name: imocha_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:

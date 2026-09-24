@@ -1,0 +1,615 @@
+import { useState, useEffect, useRef } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { api } from "../../api/client";
+import { CodeEditor } from "../../components/CodeEditor";
+import { LivePreview } from "../../components/LivePreview";
+import {
+  Clock,
+  Flag,
+  ChevronLeft,
+  ChevronRight,
+  RotateCcw,
+  Play,
+  Sun,
+  Settings,
+  AlertTriangle,
+  Info,
+  Code2,
+  Maximize2,
+  LayoutGrid,
+  Home,
+  FileText,
+  BarChart2,
+  MessageSquare,
+  Target,
+  MoreHorizontal,
+} from "lucide-react";
+import type { Question } from "../../shared/types";
+import { useCandidateStore } from "../../store/candidateStore";
+
+export function CandidateTestPage() {
+  const { questionId } = useParams();
+  const navigate = useNavigate();
+  const { candidateName } = useCandidateStore();
+
+  const [question, setQuestion] = useState<Question | null>(null);
+  const [activeCodeTab, setActiveCodeTab] = useState<"html" | "css" | "javascript">("html");
+  const [activePreviewTab, setActivePreviewTab] = useState<"preview" | "console">("preview");
+  const [activeRightPanel, setActiveRightPanel] = useState<"preview" | "testcases">("preview");
+  const [activeDescTab, setActiveDescTab] = useState<"description" | "instructions" | "examples">("description");
+
+  const [html, setHtml] = useState("<!-- Write your HTML code here -->");
+  const [css, setCss] = useState("");
+  const [js, setJs] = useState("");
+  const [preview, setPreview] = useState({ html: "", css: "", js: "" });
+  const [autoRun, setAutoRun] = useState(false);
+  const [hasRunOnce, setHasRunOnce] = useState(false);
+  const [editorTheme, setEditorTheme] = useState<"Light" | "Dark">("Light");
+
+  const [submitting, setSubmitting] = useState(false);
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [timeLeft, setTimeLeft] = useState(3600);
+
+  const codeRef = useRef({ html, css, js });
+
+  useEffect(() => {
+    codeRef.current = { html, css, js };
+  }, [html, css, js]);
+
+  // Countdown timer
+  useEffect(() => {
+    if (timeLeft <= 0 || !candidateName) return;
+    const t = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
+    return () => clearInterval(t);
+  }, [timeLeft, candidateName]);
+
+
+  useEffect(() => {
+    if (!candidateName) {
+      navigate(`/login/${questionId}`, { replace: true });
+    }
+  }, [candidateName, navigate, questionId]);
+
+  useEffect(() => {
+    if (!autoRun) return;
+    const t = setTimeout(() => { setPreview({ html, css, js }); setHasRunOnce(true); }, 600);
+    return () => clearTimeout(t);
+  }, [html, css, js, autoRun]);
+
+  useEffect(() => {
+    api.get(`/questions/${questionId}`).then((res) => setQuestion(res.data));
+  }, [questionId]);
+
+  const formatTime = (s: number) =>
+    `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+
+  const handleRunCode = () => {
+    setPreview({ html, css, js });
+    setHasRunOnce(true);
+    setActivePreviewTab("preview");
+    setActiveRightPanel("preview");
+  };
+
+  const handleResetCode = () => {
+    setHtml("<!-- Write your HTML code here -->");
+    setCss("");
+    setJs("");
+  };
+
+  const executeSubmit = async () => {
+    setShowConfirm(false);
+    setSubmitting(true);
+    try {
+      const subRes = await api.post("/submissions", {
+        question_id: questionId,
+        candidate_name: candidateName,
+        submitted_html: codeRef.current.html,
+        submitted_css: codeRef.current.css,
+        submitted_js: codeRef.current.js,
+      });
+      const submissionId = subRes.data.id;
+      await api.post(`/submissions/${submissionId}/evaluate`);
+      let attempts = 0;
+      const poll = setInterval(async () => {
+        attempts++;
+        if (attempts >= 60) { clearInterval(poll); setSubmitting(false); alert("Evaluation timed out."); return; }
+        try {
+          const evalRes = await api.get(`/submissions/${submissionId}/evaluation`);
+          if (evalRes.data?.status === "completed" || evalRes.data?.status === "failed") {
+            clearInterval(poll);
+            setSubmitting(false);
+            setIsSubmitted(true);
+          }
+        } catch (e) { console.error(e); }
+      }, 2000);
+    } catch (e) {
+      console.error(e);
+      alert("Submission failed.");
+      setSubmitting(false);
+    }
+  };
+
+
+  if (isSubmitted) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+        <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-10 border border-gray-100 text-center">
+          <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
+            <svg className="w-10 h-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg>
+          </div>
+          <h1 className="text-2xl font-bold text-gray-900 mb-4">Thank You for Submitting!</h1>
+          <p className="text-gray-500 text-sm mb-8">Your test has been successfully submitted and evaluated. The recruiter will review your results.</p>
+          <button onClick={() => window.close()} className="px-8 py-3 bg-[#FF6B35] text-white font-semibold rounded-lg hover:bg-orange-600 shadow-sm transition-colors">
+            Close Window
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!question)
+
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50 text-gray-500 text-sm">
+        Loading test environment...
+      </div>
+    );
+
+  const initial = candidateName.charAt(0).toUpperCase();
+
+  // Sidebar nav items
+  const sideNav = [
+    { Icon: Home, label: "Home" },
+    { Icon: FileText, label: "Tests", active: true },
+    { Icon: BarChart2, label: "Reports" },
+    { Icon: MessageSquare, label: "AI Interview", beta: true },
+    { Icon: Target, label: "AI Skills Match", beta: true },
+    { Icon: MoreHorizontal, label: "More" },
+  ];
+
+  return (
+    <div className="flex flex-col h-screen bg-white overflow-hidden" style={{ fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
+
+      {/* ═══ TOP HEADER ═══ */}
+      <header className="h-[56px] bg-white border-b border-gray-200 flex items-center px-5 z-30 shrink-0 gap-3">
+        {/* Logo */}
+        <div className="flex items-center gap-2 mr-3 shrink-0">
+          <div className="w-8 h-8 rounded-full border-[3px] border-[#FF6B35] flex items-center justify-center">
+            <div className="w-2.5 h-2.5 bg-[#FF6B35] rounded-full" />
+          </div>
+          <span className="text-[#FF6B35] text-lg font-bold tracking-tight">iMocha</span>
+        </div>
+
+        {/* Title */}
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-bold text-gray-900 leading-tight">Frontend Development and Design</div>
+          <div className="text-xs text-gray-400 leading-tight">HTML/CSS/JavaScript</div>
+        </div>
+
+        {/* Timer */}
+        <div className="flex items-center gap-2 shrink-0">
+          <Clock className="w-4 h-4 text-gray-400" />
+          <div>
+            <div className={`font-mono font-bold text-[17px] leading-none ${timeLeft < 300 ? "text-red-500" : "text-gray-800"}`}>
+              {formatTime(timeLeft)}
+            </div>
+            <div className="text-[10px] text-gray-400 leading-none mt-0.5">Time Remaining</div>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 ml-3 shrink-0">
+          {/* Flag */}
+          <button className="p-2 text-gray-400 hover:text-gray-600">
+            <Flag className="w-4 h-4" />
+          </button>
+          {/* End Test */}
+          <button
+            onClick={() => setShowConfirm(true)}
+            disabled={submitting}
+            className="bg-[#FF6B35] hover:bg-orange-600 text-white font-semibold text-sm px-5 py-2 rounded-md transition-colors"
+          >
+            {submitting ? "Submitting..." : "End Test"}
+          </button>
+          {/* Settings/Theme */}
+          <button className="p-2 text-gray-400 hover:text-gray-600">
+            <Sun className="w-4 h-4" />
+          </button>
+          <button className="p-2 text-gray-400 hover:text-gray-600">
+            <Settings className="w-4 h-4" />
+          </button>
+          {/* Avatar */}
+          <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
+            {initial}
+          </div>
+        </div>
+      </header>
+
+      {/* ═══ BODY ═══ */}
+      <div className="flex flex-1 overflow-hidden">
+
+        {/* ── LEFT DARK ICON SIDEBAR ── */}
+        <div className="w-[72px] bg-[#1C1C24] flex flex-col items-center py-3 shrink-0 z-20">
+          {sideNav.map(({ Icon, label, active, beta }) => (
+            <button
+              key={label}
+              className={`relative w-full flex flex-col items-center py-3 gap-1 transition-colors
+                ${active
+                  ? "text-white border-l-[3px] border-[#FF6B35] bg-[#FF6B35]/10"
+                  : "text-gray-500 hover:text-gray-300 border-l-[3px] border-transparent"
+                }`}
+            >
+              {beta && (
+                <span className="absolute top-1 right-2 text-[8px] font-bold text-[#FF6B35] leading-none">BETA</span>
+              )}
+              <Icon className="w-5 h-5" strokeWidth={1.8} />
+              <span className="text-[9px] font-medium leading-tight text-center px-1">{label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* ── MAIN CONTENT (column layout) ── */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+
+          {/* ── SECTION / QUESTION NAVIGATOR BAR ── */}
+          <div className="h-[52px] bg-white border-b border-gray-200 flex items-center px-5 shrink-0 gap-4">
+            <span className="text-xs text-gray-500 font-medium shrink-0">
+              Section 1 of 1 | HTML/CSS/JS Coding
+            </span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-600">
+                <ChevronLeft className="w-4 h-4" />
+              </button>
+              <span className="text-xs font-semibold text-gray-700">Question 1 of 1</span>
+              <button className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-600">
+                <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Spacer */}
+            <div className="flex-1" />
+
+            {/* Pagination bubbles */}
+            <div className="flex items-center gap-1">
+              {[1].map((n) => (
+                <button
+                  key={n}
+                  className={`w-7 h-7 rounded-full text-xs font-semibold flex items-center justify-center transition-colors ${
+                    n === 1
+                      ? "bg-blue-600 text-white"
+                      : "text-gray-500 hover:bg-gray-100"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+            <button className="ml-2 p-1.5 text-gray-400 hover:text-gray-600 border border-gray-200 rounded">
+              <LayoutGrid className="w-4 h-4" />
+            </button>
+          </div>
+
+          {/* ── THREE-COLUMN WORK AREA ── */}
+          <div className="flex-1 flex overflow-hidden">
+
+            {/* ── COL A: QUESTION DESCRIPTION ── */}
+            <div className="w-[320px] flex flex-col bg-white border-r border-gray-200 overflow-hidden shrink-0">
+              {/* Tab row */}
+              <div className="flex border-b border-gray-200 shrink-0 px-4">
+                {(["description", "instructions", "examples"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveDescTab(tab)}
+                    className={`py-3 mr-5 text-sm font-medium capitalize transition-colors border-b-2 -mb-px ${
+                      activeDescTab === tab
+                        ? "text-blue-600 border-blue-600"
+                        : "text-gray-500 border-transparent hover:text-gray-700"
+                    }`}
+                  >
+                    {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                  </button>
+                ))}
+              </div>
+
+              {/* Content area */}
+              <div className="flex-1 overflow-y-auto p-5">
+                {/* Title + tag */}
+                <div className="flex items-baseline gap-3 mb-3">
+                  <h2 className="text-[17px] font-bold text-gray-900">{question.title}</h2>
+                  <span className="text-[11px] font-semibold px-2 py-0.5 rounded bg-orange-50 text-orange-600 border border-orange-100 shrink-0">
+                    Medium
+                  </span>
+                </div>
+
+                {activeDescTab === "description" && (
+                  <>
+                    <div
+                      className="prose prose-sm max-w-none text-gray-700 leading-relaxed mb-4"
+                      dangerouslySetInnerHTML={{ __html: question.description_html }}
+                    />
+                    {/* Note box */}
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3.5 flex gap-2.5 mb-5">
+                      <Info className="w-4 h-4 text-blue-500 mt-0.5 shrink-0" />
+                      <div className="text-sm text-blue-800">
+                        <span className="font-semibold">Note</span>
+                        <div className="text-blue-700 mt-0.5">Make sure your solution meets all the requirements before submitting.</div>
+                      </div>
+                    </div>
+                    {/* Expected Output */}
+                    <details open className="border border-gray-200 rounded-lg overflow-hidden">
+                      <summary className="flex items-center justify-between px-4 py-2.5 bg-gray-50 cursor-pointer select-none text-sm font-semibold text-gray-700 list-none">
+                        <div className="flex items-center gap-2">
+                          <Code2 className="w-4 h-4 text-gray-500" />
+                          Expected Output
+                        </div>
+                        <ChevronLeft className="w-4 h-4 rotate-90 text-gray-400" />
+                      </summary>
+                      <div className="p-4 space-y-3">
+                        <div>
+                          <p className="text-xs font-semibold text-gray-600 mb-1.5">Initial Screen:</p>
+                          <div className="border border-gray-200 rounded p-3 bg-white text-xs font-mono text-blue-600 space-y-2">
+                            <div className="flex justify-between">
+                              <span>anti-clockwise</span>
+                              <span>clockwise</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>toggle border color</span>
+                              <span>toggle border style</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold text-gray-600 mb-1.5">After clicking clockwise:</p>
+                          <div className="border border-gray-200 rounded p-3 bg-white text-xs font-mono text-blue-600 space-y-2">
+                            <div className="flex justify-between">
+                              <span>toggle border color</span>
+                              <span>anti-clockwise</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>toggle border style</span>
+                              <span>clockwise</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </details>
+                  </>
+                )}
+
+                {activeDescTab === "instructions" && (
+                  <div className="space-y-3 text-sm text-gray-600">
+                    <p className="font-semibold text-gray-800">General Instructions</p>
+                    <ul className="list-disc pl-5 space-y-2">
+                      <li>Write your solution using the HTML, CSS, and JavaScript tabs.</li>
+                      <li>Click <strong>Run Code</strong> to test before submitting.</li>
+                      <li>Use <strong>Auto Run</strong> to enable live preview as you type.</li>
+                      <li>Once you click <strong>End Test</strong>, your submission is final.</li>
+                    </ul>
+                  </div>
+                )}
+
+                {activeDescTab === "examples" && (
+                  <div className="space-y-3 text-sm text-gray-600">
+                    <p className="font-semibold text-gray-800">Example Patterns</p>
+                    <div className="bg-gray-50 rounded-lg p-4 font-mono text-xs border border-gray-200 text-gray-700">
+                      <p className="text-gray-400 mb-1">{"<!-- Example -->"}</p>
+                      <p>{"<ul id='colors'>"}</p>
+                      <p className="pl-4">{"<li>Red</li>"}</p>
+                      <p>{"</ul>"}</p>
+                    </div>
+                    <p className="text-gray-400 text-xs">See Description tab for the specific problem requirements.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── COL B: CODE EDITOR ── */}
+            <div className="flex-1 flex flex-col overflow-hidden border-r border-gray-200">
+              {/* Editor header */}
+              <div className="h-11 bg-white border-b border-gray-200 flex items-center px-4 justify-between shrink-0">
+                <span className="text-sm font-bold text-gray-800">Code Editor</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setEditorTheme(editorTheme === "Light" ? "Dark" : "Light")}
+                    className="flex items-center gap-1.5 text-xs text-gray-600 border border-gray-200 rounded px-2.5 py-1.5 hover:bg-gray-50"
+                  >
+                    {editorTheme}
+                    <ChevronLeft className="w-3 h-3 -rotate-90 text-gray-400" />
+                  </button>
+                  <button
+                    onClick={handleResetCode}
+                    className="flex items-center gap-1.5 text-xs text-gray-600 border border-gray-200 rounded px-2.5 py-1.5 hover:bg-gray-50"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" />
+                    Reset Code
+                  </button>
+                  <button className="p-1.5 text-gray-400 hover:text-gray-600 border border-gray-200 rounded">
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Code tabs */}
+              <div className="flex border-b border-gray-200 bg-white px-4 shrink-0">
+                {(["html", "css", "javascript"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveCodeTab(tab)}
+                    className={`py-2.5 mr-6 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                      activeCodeTab === tab
+                        ? "text-blue-600 border-blue-600"
+                        : "text-gray-500 border-transparent hover:text-gray-700"
+                    }`}
+                  >
+                    {tab === "javascript" ? "JavaScript" : tab.toUpperCase()}
+                  </button>
+                ))}
+              </div>
+
+              {/* Monaco Editor */}
+              <div className="flex-1 overflow-hidden">
+                {activeCodeTab === "html" && (
+                  <CodeEditor language="html" value={html} onChange={(v) => setHtml(v || "")} height="100%" theme={editorTheme === "Dark" ? "vs-dark" : "vs"} />
+                )}
+                {activeCodeTab === "css" && (
+                  <CodeEditor language="css" value={css} onChange={(v) => setCss(v || "")} height="100%" theme={editorTheme === "Dark" ? "vs-dark" : "vs"} />
+                )}
+                {activeCodeTab === "javascript" && (
+                  <CodeEditor language="javascript" value={js} onChange={(v) => setJs(v || "")} height="100%" theme={editorTheme === "Dark" ? "vs-dark" : "vs"} />
+                )}
+              </div>
+
+              {/* Run Code footer */}
+              <div className="h-[52px] bg-white border-t border-gray-200 flex items-center px-4 gap-4 shrink-0">
+                <button
+                  onClick={handleRunCode}
+                  className="flex items-center gap-2 bg-[#2D9248] hover:bg-green-800 text-white font-semibold text-sm px-5 py-2.5 rounded-md transition-colors"
+                >
+                  <Play className="w-3.5 h-3.5 fill-white" />
+                  Run Code
+                </button>
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={autoRun}
+                    onChange={(e) => { setAutoRun(e.target.checked); if (e.target.checked) setHasRunOnce(true); }}
+                    className="w-4 h-4 rounded accent-green-600"
+                  />
+                  Auto Run
+                </label>
+                <span className="text-gray-300 text-base">ⓘ</span>
+
+                {/* Spacer */}
+                <div className="flex-1" />
+
+                {/* Previous / Next */}
+                <button className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors">
+                  Previous
+                </button>
+                <button className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors">
+                  Next Question
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            {/* ── COL C: PREVIEW / OUTPUT ── */}
+            <div className="w-[360px] flex flex-col bg-white shrink-0">
+              {/* Top panel tabs: Preview/Output | Test Cases */}
+              <div className="h-11 bg-white border-b border-gray-200 flex items-center px-0 shrink-0">
+                {(["preview", "testcases"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveRightPanel(tab)}
+                    className={`h-full px-5 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                      activeRightPanel === tab
+                        ? "text-blue-600 border-blue-600 bg-white"
+                        : "text-gray-500 border-transparent hover:text-gray-700"
+                    }`}
+                  >
+                    {tab === "preview" ? "Preview / Output" : "Test Cases"}
+                  </button>
+                ))}
+              </div>
+
+              {activeRightPanel === "preview" && (
+                <>
+                  {/* Preview | Console sub-tabs */}
+                  <div className="flex border-b border-gray-200 px-4 bg-white shrink-0">
+                    {(["preview", "console"] as const).map((tab) => (
+                      <button
+                        key={tab}
+                        onClick={() => setActivePreviewTab(tab)}
+                        className={`py-2.5 mr-5 text-sm font-medium border-b-2 -mb-px transition-colors capitalize ${
+                          activePreviewTab === tab
+                            ? "text-blue-600 border-blue-600"
+                            : "text-gray-500 border-transparent hover:text-gray-700"
+                        }`}
+                      >
+                        {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Preview content */}
+                  <div className="flex-1 overflow-hidden bg-white relative">
+                    {activePreviewTab === "preview" ? (
+                      hasRunOnce ? (
+                        <LivePreview {...preview} className="w-full h-full" />
+                      ) : (
+                        <div className="flex flex-col items-center justify-center h-full text-center px-10">
+                          {/* Code icon placeholder */}
+                          <div className="w-20 h-16 bg-gray-100 rounded-xl flex items-center justify-center mb-4 relative">
+                            <div className="absolute top-2 left-3 flex gap-1">
+                              <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                              <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                              <div className="w-1.5 h-1.5 rounded-full bg-gray-300" />
+                            </div>
+                            <svg className="w-8 h-8 text-gray-400 mt-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                              <polyline points="16 18 22 12 16 6" />
+                              <polyline points="8 6 2 12 8 18" />
+                            </svg>
+                          </div>
+                          <p className="text-sm font-bold text-gray-800 mb-1">Your output will appear here</p>
+                          <p className="text-xs text-gray-400">Run your code to see the result</p>
+                        </div>
+                      )
+                    ) : (
+                      <div className="h-full bg-gray-950 p-4 font-mono text-xs text-green-400">
+                        <span className="text-gray-500">{"> "}</span>Console output will appear here after running code...
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+
+              {activeRightPanel === "testcases" && (
+                <div className="flex-1 overflow-y-auto p-5">
+                  <p className="text-sm font-semibold text-gray-700 mb-3">Automated Test Cases</p>
+                  <p className="text-xs text-gray-400 bg-gray-50 p-4 rounded-lg border border-gray-200 text-center">
+                    Submit your solution to see detailed test case results and AI evaluation score.
+                  </p>
+                </div>
+              )}
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+      {/* ═══ CONFIRMATION MODAL ═══ */}
+      {showConfirm && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center backdrop-blur-sm">
+          <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-7">
+            <div className="flex items-center gap-3 mb-4">
+              <AlertTriangle className="w-5 h-5 text-amber-500" />
+              <h3 className="text-base font-bold text-gray-900">End Test & Submit?</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-6">
+              You are about to submit your solution for AI evaluation. This cannot be undone and your remaining time will be forfeited.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setShowConfirm(false)} className="px-4 py-2 text-sm rounded-lg text-gray-700 border border-gray-300 font-medium hover:bg-gray-50">
+                Continue Working
+              </button>
+              <button onClick={executeSubmit} className="px-4 py-2 text-sm rounded-lg bg-[#FF6B35] text-white font-semibold hover:bg-orange-600">
+                Submit Now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══ EVALUATION MODAL ═══ */}
+      {submitting && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-10 text-center">
+            <div className="w-14 h-14 border-4 border-gray-100 border-t-[#FF6B35] rounded-full animate-spin mx-auto mb-5" />
+            <h3 className="text-lg font-bold text-gray-900 mb-2">Evaluating Solution</h3>
+            <p className="text-gray-500 text-sm">Running automated Playwright checks and AI semantic review...</p>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
