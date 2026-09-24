@@ -30,7 +30,7 @@ import { useCandidateStore } from "../../store/candidateStore";
 export function CandidateTestPage() {
   const { questionId } = useParams();
   const navigate = useNavigate();
-  const { candidateName } = useCandidateStore();
+  const { candidateName, candidateEmail } = useCandidateStore();
 
   const [question, setQuestion] = useState<Question | null>(null);
   const [activeCodeTab, setActiveCodeTab] = useState<"html" | "css" | "javascript">("html");
@@ -60,7 +60,14 @@ export function CandidateTestPage() {
   // Countdown timer
   useEffect(() => {
     if (timeLeft <= 0 || !candidateName) return;
-    const t = setInterval(() => setTimeLeft((prev) => prev - 1), 1000);
+    const t = setInterval(() => setTimeLeft((prev) => {
+      if (prev <= 1) {
+        clearInterval(t);
+        executeSubmit();
+        return 0;
+      }
+      return prev - 1;
+    }), 1000);
     return () => clearInterval(t);
   }, [timeLeft, candidateName]);
 
@@ -104,6 +111,7 @@ export function CandidateTestPage() {
       const subRes = await api.post("/submissions", {
         question_id: questionId,
         candidate_name: candidateName,
+        candidate_email: candidateEmail,
         submitted_html: codeRef.current.html,
         submitted_css: codeRef.current.css,
         submitted_js: codeRef.current.js,
@@ -209,7 +217,7 @@ export function CandidateTestPage() {
             disabled={submitting}
             className="bg-[#FF6B35] hover:bg-orange-600 text-white font-semibold text-sm px-5 py-2 rounded-md transition-colors"
           >
-            {submitting ? "Submitting..." : "End Test"}
+            {submitting ? "Submitting..." : "Submit Solution"}
           </button>
           {/* Settings/Theme */}
           <button className="p-2 text-gray-400 hover:text-gray-600">
@@ -383,7 +391,7 @@ export function CandidateTestPage() {
                       <li>Write your solution using the HTML, CSS, and JavaScript tabs.</li>
                       <li>Click <strong>Run Code</strong> to test before submitting.</li>
                       <li>Use <strong>Auto Run</strong> to enable live preview as you type.</li>
-                      <li>Once you click <strong>End Test</strong>, your submission is final.</li>
+                      <li>Once you click <strong>Submit Solution</strong>, your submission is final.</li>
                     </ul>
                   </div>
                 )}
@@ -583,7 +591,7 @@ export function CandidateTestPage() {
           <div className="bg-white rounded-xl shadow-2xl w-full max-w-md p-7">
             <div className="flex items-center gap-3 mb-4">
               <AlertTriangle className="w-5 h-5 text-amber-500" />
-              <h3 className="text-base font-bold text-gray-900">End Test & Submit?</h3>
+              <h3 className="text-base font-bold text-gray-900">Submit Solution?</h3>
             </div>
             <p className="text-sm text-gray-600 mb-6">
               You are about to submit your solution for AI evaluation. This cannot be undone and your remaining time will be forfeited.

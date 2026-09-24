@@ -33,16 +33,13 @@ async def get_invite(token: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(CandidateInvite).where(CandidateInvite.token == token))
     invite = result.scalar_one_or_none()
     if not invite:
-        raise HTTPException(status_code=404, detail="Invalid or expired token")
+        raise HTTPException(status_code=404, detail="Token not found")
 
-    # BUG-32 FIX: Check token expiry
-    if invite.expires_at < datetime.now(timezone.utc).replace(tzinfo=None):
-        raise HTTPException(status_code=410, detail="Invite token has expired")
+    if invite.used_at is not None or invite.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invite invalid or expired")
 
-    # BUG-33 FIX: Mark as used
-    if invite.used_at is None:
-        invite.used_at = datetime.utcnow()
-        await db.commit()
+    invite.used_at = datetime.utcnow()
+    await db.commit()
 
     return {
         "question_id": invite.question_id,
