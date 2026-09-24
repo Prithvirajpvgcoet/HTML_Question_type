@@ -1,7 +1,5 @@
 from config import settings
-from groq import AsyncGroq
-
-client = AsyncGroq(api_key=settings.groq_api_key)
+from ai.llm_client.client import client  # shared Mistral client instance
 
 PROMPT = """
 You are an expert technical interviewer. You have just automatically graded a candidate's HTML/CSS/JS test.
@@ -15,17 +13,17 @@ async def generate_eval_feedback(html: str, css: str, js: str, eval_results: lis
         f"- Check: {r['expected']} | Actual: {r['actual']} | Passed: {r['passed']}"
         for r in eval_results
     ])
-    
-    response = await client.chat.completions.create(
-        model=settings.groq_model,
+
+    response = await client.chat.complete_async(
+        model=settings.mistral_model,
         messages=[
             {"role": "system", "content": PROMPT},
             {"role": "user", "content": f"Candidate HTML:\n{html}\n\nCSS:\n{css}\n\nJS:\n{js}\n\nResults:\n{results_text}"}
         ],
         temperature=0.3,
-        max_tokens=150
+        max_tokens=150,
     )
-    
+
     content = response.choices[0].message.content
     if not content or not content.strip():
         return "Evaluation complete. Feedback generation was skipped."

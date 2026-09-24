@@ -1,9 +1,8 @@
 from config import settings
 import json
 import re
-from groq import AsyncGroq
+from ai.llm_client.client import client
 
-client = AsyncGroq(api_key=settings.groq_api_key)
 
 PROMPT = """You are a test automation engineer generating UI assertions for an HTML/CSS/JS coding question on an assessment platform.
 
@@ -96,8 +95,8 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
         user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
         user_content += "Respond with ONLY a JSON object, nothing else."
 
-        response = await client.chat.completions.create(
-            model=settings.groq_model,
+        response = await client.chat.complete_async(
+            model=settings.mistral_model,
             messages=[
                 {"role": "system", "content": PROMPT},
                 {"role": "user", "content": user_content}
@@ -181,8 +180,8 @@ async def generate_edge_cases_from_llm(title: str, description: str, existing_as
     Make them worth 5 points each.
     """
     try:
-        response = await client.chat.completions.create(
-            model=settings.groq_model,
+        response = await client.chat.complete_async(
+            model=settings.mistral_model,
             messages=[{"role": "user", "content": edge_prompt}],
             temperature=0.3,
             max_tokens=800

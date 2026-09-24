@@ -4,8 +4,8 @@ class Settings(BaseSettings):
     database_url: str
     database_url_sync: str
     redis_url: str
-    groq_api_key: str
-    groq_model: str = "openai/gpt-oss-120b"
+    mistral_api_key: str
+    mistral_model: str = "mistral-small-latest"
     llm_max_tokens: int = 4096
     llm_temperature: float = 0.2
     sandbox_pool_size: int = 4
