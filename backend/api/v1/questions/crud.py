@@ -171,7 +171,7 @@ async def generate_assertions(question_id: str, db: AsyncSession = Depends(get_d
         raise HTTPException(status_code=400, detail="A reference HTML solution must be saved before generating assertions.")
         
     # 2. Call LLM
-try:
+    try:
         raw_assertions = await generate_assertions_from_llm(
             title=q.title,
             description=q.description_html,
@@ -181,7 +181,7 @@ try:
         )
     except Exception as e:
         print(f"Failed to generate assertions (Rate limit or LLM error): {e}")
-        q.validation_status = "generation_failed"
+        q.validation_status = "failed"
         await db.commit()
         raise HTTPException(status_code=500, detail="Failed to generate assertions from LLM.")
     
