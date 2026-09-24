@@ -97,33 +97,17 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
     css = css or ""
     js = js or ""
     # Pre-parse valid IDs and Classes from the reference HTML to use as a guardrail
-    valid_ids = set(re.findall(r'id=["']([^"']+)["']', html))
-    valid_classes = set(c for match in re.findall(r'class=["']([^"']+)["']', html) for c in match.split())
+    valid_ids = set(re.findall(r'id=["\']([^"\']+)["\']', html))
+    valid_classes = set(c for match in re.findall(r'class=["\']([^"\']+)["\']', html) for c in match.split())
     
     # Inject explicit allowed lists into the prompt
     allowed_ids_str = ", ".join([f"#{i}" for i in valid_ids]) if valid_ids else "None"
     allowed_classes_str = ", ".join([f".{c}" for c in valid_classes]) if valid_classes else "None"
     
-    user_content = f"Question Title: {title}
-Question Description: {description}
-
-Reference HTML:
-{html}
-
-Reference CSS:
-{css}
-
-Reference JS:
-{js}
-
-"
-    user_content += "CRITICAL: You may ONLY use the following specific selectors found in the reference code:
-"
-    user_content += f"ALLOWED IDs: {allowed_ids_str}
-ALLOWED CLASSES: {allowed_classes_str}
-
-"
-
+    user_content = f"Question Title: {title}\nQuestion Description: {description}\n\nReference HTML:\n{html}\n\nReference CSS:\n{css}\n\nReference JS:\n{js}\n\n"
+    user_content += "CRITICAL: You may ONLY use the following specific selectors found in the reference code:\n"
+    user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
+    user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
     try:
         # Schema-enforced LLM call with built-in retries and rate limiting
         result = await call_llm_structured(
@@ -131,7 +115,7 @@ ALLOWED CLASSES: {allowed_classes_str}
             user_message=user_content,
             schema=AssertionList,
             model=settings.llm_model_generation,
-            thinking_level="low"
+            thinking_level="high"
         )
         
         # Result is already a parsed dictionary thanks to call_llm_structured
@@ -202,7 +186,7 @@ async def generate_edge_cases_from_llm(title: str, description: str, existing_as
             user_message=edge_prompt,
             schema=AssertionList,
             model=settings.llm_model_generation,
-            thinking_level="low"
+            thinking_level="high"
         )
         return result.get("assertions", [])[:2]
     except Exception as e:
