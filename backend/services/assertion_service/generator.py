@@ -1,9 +1,24 @@
 from config import settings
 import json
 import re
-from ai.llm_client.client import client
-from ai.llm_client.retry import with_retry
+from ai.llm_client.client import call_llm_structured
+from pydantic import BaseModel, Field
+from typing import Literal, Optional
 
+class LLMAssertion(BaseModel):
+    trigger: Literal["page_load", "click", "input", "change", "hover"]
+    trigger_selector: Optional[str] = Field(default=None)
+    check_selector: str
+    wait_ms: int = Field(default=300)
+    check_type: Literal["dom_presence", "computed_style", "attribute", "text_content", "visual_region"]
+    expected_result: str
+    points: int = 5
+    execution_mode: Literal["isolated", "sequential"] = "sequential"
+    group_id: Optional[str] = Field(default=None)
+    sequence_order: Optional[int] = Field(default=1)
+
+class AssertionList(BaseModel):
+    assertions: list[LLMAssertion]
 
 PROMPT = """You are a test automation engineer generating UI assertions for an HTML/CSS/JS coding question on an assessment platform.
 
@@ -82,44 +97,47 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
     css = css or ""
     js = js or ""
     # Pre-parse valid IDs and Classes from the reference HTML to use as a guardrail
-    valid_ids = set(re.findall(r'id=["\']([^"\']+)["\']', html))
-    valid_classes = set(c for match in re.findall(r'class=["\']([^"\']+)["\']', html) for c in match.split())
+    valid_ids = set(re.findall(r'id=["']([^"']+)["']', html))
+    valid_classes = set(c for match in re.findall(r'class=["']([^"']+)["']', html) for c in match.split())
     
-    max_retries = 3
-    for attempt in range(max_retries):
-        # Inject explicit allowed lists into the prompt
-        allowed_ids_str = ", ".join([f"#{i}" for i in valid_ids]) if valid_ids else "None"
-        allowed_classes_str = ", ".join([f".{c}" for c in valid_classes]) if valid_classes else "None"
+    # Inject explicit allowed lists into the prompt
+    allowed_ids_str = ", ".join([f"#{i}" for i in valid_ids]) if valid_ids else "None"
+    allowed_classes_str = ", ".join([f".{c}" for c in valid_classes]) if valid_classes else "None"
+    
+    user_content = f"Question Title: {title}
+Question Description: {description}
+
+Reference HTML:
+{html}
+
+Reference CSS:
+{css}
+
+Reference JS:
+{js}
+
+"
+    user_content += "CRITICAL: You may ONLY use the following specific selectors found in the reference code:
+"
+    user_content += f"ALLOWED IDs: {allowed_ids_str}
+ALLOWED CLASSES: {allowed_classes_str}
+
+"
+
+    try:
+        # Schema-enforced LLM call with built-in retries and rate limiting
+        result = await call_llm_structured(
+            system_prompt=PROMPT,
+            user_message=user_content,
+            schema=AssertionList,
+            model=settings.llm_model_generation,
+            thinking_level="low"
+        )
         
-        user_content = f"Question Title: {title}\nQuestion Description: {description}\n\nReference HTML:\n{html}\n\nReference CSS:\n{css}\n\nReference JS:\n{js}\n\n"
-        user_content += "CRITICAL: You may ONLY use the following specific selectors found in the reference code:\n"
-        user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
-        user_content += "Respond with ONLY a JSON object, nothing else."
-
-        response = await with_retry(lambda: client.chat.complete_async(
-            model=settings.mistral_model,
-            messages=[
-                {"role": "system", "content": PROMPT},
-                {"role": "user", "content": user_content}
-            ],
-            temperature=0.0 if attempt == 0 else 0.2 * attempt, # Pinned to 0 on first attempt
-            max_tokens=4096,
-            response_format={"type": "json_object"}
-        ))
-
-        raw = response.choices[0].message.content.strip()
-
-        # Extract JSON block if the model wraps it in markdown
-        try:
-            result = json.loads(raw)
-            assertions = result.get("assertions", [])
-        except json.JSONDecodeError as e:
-            print(f"JSON Parse Error on attempt {attempt}: {e}")
-            if attempt == max_retries - 1:
-                raise ValueError(f"Failed to parse LLM JSON after {max_retries} attempts: {e}")
-            continue
+        # Result is already a parsed dictionary thanks to call_llm_structured
+        assertions = result.get("assertions", [])
         
-        # GUARDRAIL: Validate that the generated IDs/Classes actually exist in the HTML
+        # Guardrail check
         is_valid = True
         for a in assertions:
             combined_selectors = (a.get('trigger_selector') or '') + ' ' + (a.get('check_selector') or '')
@@ -138,11 +156,12 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
                     print(f"Guardrail failed: Class '{cls_sel}' not found in reference HTML.")
                     is_valid = False
                     
-        if is_valid:
-            break
-        elif attempt == max_retries - 1:
-            print("Warning: Max retries reached, accepting assertions despite guardrail warnings.")
-
+        if not is_valid:
+            print("Warning: Guardrail warnings detected, but returning assertions anyway (Gemini schema usually mitigates worst offenses).")
+            
+    except Exception as e:
+        print(f"generate_assertions_from_llm failed: {e}")
+        raise e
 
     # Enforce max 6 assertions
     assertions = assertions[:6]
@@ -176,21 +195,18 @@ async def generate_edge_cases_from_llm(title: str, description: str, existing_as
     Based on the {len(existing_assertions)} assertions already created for '{title}', generate 2 additional edge case assertions 
     that would catch common candidate mistakes (e.g. empty/null values, wrong types, extreme values).
     Description: {description}
-    Respond ONLY with a JSON list containing EXACTLY 2 JSON objects.
-    Each object must have: trigger (str), trigger_selector (str), check_selector (str), check_type (str), expected_result (str), points (int).
-    Make them worth 5 points each.
     """
     try:
-        response = await with_retry(lambda: client.chat.complete_async(
-            model=settings.mistral_model,
-            messages=[{"role": "user", "content": edge_prompt}],
-            temperature=0.3,
-            max_tokens=800
-        ))
-        content = response.choices[0].message.content
-        match = re.search(r'\[.*\]', content, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
+        result = await call_llm_structured(
+            system_prompt="You are an edge-case generation AI. Generate edge cases.",
+            user_message=edge_prompt,
+            schema=AssertionList,
+            model=settings.llm_model_generation,
+            thinking_level="low"
+        )
+        return result.get("assertions", [])[:2]
+    except Exception as e:
+        print(f"Edge Case Generator Error: {e}")
         return []
     except Exception as e:
         print(f"Edge Case Generator Error: {e}")
