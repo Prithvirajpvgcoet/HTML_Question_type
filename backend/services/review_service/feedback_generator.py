@@ -15,17 +15,31 @@ async def generate_eval_feedback(html: str, css: str, js: str, eval_results: lis
         for r in eval_results
     ])
 
-    response = await with_retry(lambda: client.chat.complete_async(
-        model=settings.mistral_model,
-        messages=[
-            {"role": "system", "content": PROMPT},
-            {"role": "user", "content": f"Candidate HTML:\n{html}\n\nCSS:\n{css}\n\nJS:\n{js}\n\nResults:\n{results_text}"}
-        ],
-        temperature=0.3,
-        max_tokens=150,
-    ))
+    try:
+        response = await with_retry(lambda: client.chat.complete_async(
+            model=settings.mistral_model,
+            messages=[
+                {"role": "system", "content": PROMPT},
+                {"role": "user", "content": f"Candidate HTML:
+{html}
 
-    content = response.choices[0].message.content
-    if not content or not content.strip():
-        return "Evaluation complete. Feedback generation was skipped."
-    return content.strip()
+CSS:
+{css}
+
+JS:
+{js}
+
+Results:
+{results_text}"}
+            ],
+            temperature=0.3,
+            max_tokens=150,
+        ))
+
+        content = response.choices[0].message.content
+        if not content or not content.strip():
+            return "Evaluation complete. Feedback generation was skipped."
+        return content.strip()
+    except Exception as e:
+        print(f"Feedback generation failed: {e}")
+        return "Evaluation complete. AI feedback is currently unavailable."

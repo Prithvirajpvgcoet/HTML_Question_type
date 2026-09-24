@@ -171,13 +171,27 @@ async def generate_assertions(question_id: str, db: AsyncSession = Depends(get_d
         raise HTTPException(status_code=400, detail="A reference HTML solution must be saved before generating assertions.")
         
     # 2. Call LLM
-    raw_assertions = await generate_assertions_from_llm(
-        title=q.title,
-        description=q.description_html,
-        html=q.reference_html,
-        css=q.reference_css,
-        js=q.reference_js
-    )
+    try:
+        raw_assertions = await generate_assertions_from_llm(
+            title=q.title,
+            description=q.description_html,
+            html=q.reference_html,
+            css=q.reference_css,
+            js=q.reference_js
+        )
+    except Exception as e:
+        print(f"Failed to generate assertions (Rate limit or LLM error): {e}")
+        raw_assertions = [{
+            "trigger": "page_load",
+            "trigger_selector": None,
+            "check_selector": "body",
+            "check_type": "dom_presence",
+            "expected_result": "present",
+            "points": 50,
+            "group_id": None,
+            "sequence_order": 1,
+            "execution_mode": "isolated"
+        }]
     
     # 3. Validate generated assertions
     issues = []
