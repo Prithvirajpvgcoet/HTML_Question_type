@@ -1,4 +1,4 @@
-import { Home, FileText, ClipboardCheck, MessageSquare, Target, MoreHorizontal } from "lucide-react";
+import { Home, FileText, ClipboardCheck, MessageSquare, Target, } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 
 export function Sidebar() {
@@ -11,7 +11,7 @@ export function Sidebar() {
     { icon: ClipboardCheck, label: "Reports", path: "/reports" },
     { icon: MessageSquare, label: "AI Interview", path: "#", beta: true },
     { icon: Target, label: "AI Skills Match", path: "#", beta: true },
-    { icon: MoreHorizontal, label: "More", path: "#" },
+    
   ];
 
   return (

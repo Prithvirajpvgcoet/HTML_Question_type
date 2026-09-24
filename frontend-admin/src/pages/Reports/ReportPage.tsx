@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { 
-  ArrowLeft, Download, MoreVertical, Trophy, Sparkles, CheckCircle2, 
+  ArrowLeft, Download, Trophy, Sparkles, CheckCircle2, 
   Info, Check, ChevronRight, Clock, AlertCircle, Lightbulb, Settings, Eye, ClipboardList, XCircle
 } from "lucide-react";
 
@@ -76,9 +76,7 @@ export function ReportPage() {
             <button onClick={toggleReview} className="bg-[#FF5722] hover:bg-[#F4511E] text-white px-4 py-1.5 rounded-md text-sm font-semibold transition-colors">
               {report?.needs_review ? "Clear Review Flag" : "Mark for Review"}
             </button>
-            <button className="p-1.5 border border-gray-200 rounded-md hover:bg-gray-50 text-gray-600">
-              <MoreVertical className="w-4 h-4" />
-            </button>
+            
           </div>
         </div>
 

@@ -5,7 +5,7 @@ import {
   ChevronLeft,
   Pencil,
   Star,
-  MoreVertical,
+  
   AlignLeft,
   Info,
   Download,
@@ -131,9 +131,7 @@ export function QuestionPreviewPage() {
               <button className="text-gray-400 hover:text-yellow-500 transition-colors">
                 <Star className="w-4 h-4" />
               </button>
-              <button className="text-gray-400 hover:text-gray-600">
-                <MoreVertical className="w-4 h-4" />
-              </button>
+              
             </div>
 
             {/* Title */}

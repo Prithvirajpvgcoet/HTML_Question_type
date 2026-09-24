@@ -5,24 +5,15 @@ import { CodeEditor } from "../../components/CodeEditor";
 import { LivePreview } from "../../components/LivePreview";
 import {
   Clock,
-  Flag,
   ChevronLeft,
   ChevronRight,
   RotateCcw,
   Play,
-  Sun,
-  Settings,
   AlertTriangle,
   Info,
   Code2,
   Maximize2,
   LayoutGrid,
-  Home,
-  FileText,
-  BarChart2,
-  MessageSquare,
-  Target,
-  MoreHorizontal,
 } from "lucide-react";
 import type { Question } from "../../shared/types";
 import { useCandidateStore } from "../../store/candidateStore";
@@ -166,16 +157,6 @@ export function CandidateTestPage() {
 
   const initial = candidateName.charAt(0).toUpperCase();
 
-  // Sidebar nav items
-  const sideNav = [
-    { Icon: Home, label: "Home" },
-    { Icon: FileText, label: "Tests", active: true },
-    { Icon: BarChart2, label: "Reports" },
-    { Icon: MessageSquare, label: "AI Interview", beta: true },
-    { Icon: Target, label: "AI Skills Match", beta: true },
-    { Icon: MoreHorizontal, label: "More" },
-  ];
-
   return (
     <div className="flex flex-col h-screen bg-white overflow-hidden" style={{ fontFamily: "'Inter', 'Segoe UI', sans-serif" }}>
 
@@ -207,10 +188,6 @@ export function CandidateTestPage() {
         </div>
 
         <div className="flex items-center gap-2 ml-3 shrink-0">
-          {/* Flag */}
-          <button className="p-2 text-gray-400 hover:text-gray-600">
-            <Flag className="w-4 h-4" />
-          </button>
           {/* End Test */}
           <button
             onClick={() => setShowConfirm(true)}
@@ -218,13 +195,6 @@ export function CandidateTestPage() {
             className="bg-[#FF6B35] hover:bg-orange-600 text-white font-semibold text-sm px-5 py-2 rounded-md transition-colors"
           >
             {submitting ? "Submitting..." : "Submit Solution"}
-          </button>
-          {/* Settings/Theme */}
-          <button className="p-2 text-gray-400 hover:text-gray-600">
-            <Sun className="w-4 h-4" />
-          </button>
-          <button className="p-2 text-gray-400 hover:text-gray-600">
-            <Settings className="w-4 h-4" />
           </button>
           {/* Avatar */}
           <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600">
@@ -235,26 +205,6 @@ export function CandidateTestPage() {
 
       {/* ═══ BODY ═══ */}
       <div className="flex flex-1 overflow-hidden">
-
-        {/* ── LEFT DARK ICON SIDEBAR ── */}
-        <div className="w-[72px] bg-[#1C1C24] flex flex-col items-center py-3 shrink-0 z-20">
-          {sideNav.map(({ Icon, label, active, beta }) => (
-            <button
-              key={label}
-              className={`relative w-full flex flex-col items-center py-3 gap-1 transition-colors
-                ${active
-                  ? "text-white border-l-[3px] border-[#FF6B35] bg-[#FF6B35]/10"
-                  : "text-gray-500 hover:text-gray-300 border-l-[3px] border-transparent"
-                }`}
-            >
-              {beta && (
-                <span className="absolute top-1 right-2 text-[8px] font-bold text-[#FF6B35] leading-none">BETA</span>
-              )}
-              <Icon className="w-5 h-5" strokeWidth={1.8} />
-              <span className="text-[9px] font-medium leading-tight text-center px-1">{label}</span>
-            </button>
-          ))}
-        </div>
 
         {/* ── MAIN CONTENT (column layout) ── */}
         <div className="flex-1 flex flex-col overflow-hidden">
