@@ -33,17 +33,27 @@ export function ReportPage() {
   const tcPassed = report?.tc_passed || 0;
   const tcTotal = report?.tc_total || 0;
   const maxScore = report?.max_score || (tcTotal * 5 + 50);
-  const isPassed = maxScore > 0 ? (score / maxScore) >= 0.7 : false;
-  
+
+  // BUG-12: Compute "Not Evaluated / Skipped" from real llm_status values
+  const testCases = report?.results || [];
+  const tcSkipped = testCases.filter(
+    (tc: any) => tc.llm_status === "skipped_playwright_passed"
+  ).length;
+  const tcNotRun = testCases.filter(
+    (tc: any) => tc.llm_status === "not_run" || !tc.llm_status
+  ).length;
+
   const tcPassedRate = tcTotal > 0 ? Math.round((tcPassed / tcTotal) * 100) : 0;
   const tcFailedRate = tcTotal > 0 ? 100 - tcPassedRate : 0;
   const tcFailed = tcTotal - tcPassed;
-  
+  const tcNotEvaluatedCount = tcSkipped + tcNotRun;
+  const tcNotEvaluatedRate = tcTotal > 0 ? Math.round((tcNotEvaluatedCount / tcTotal) * 100) : 0;
+  const isPassed = maxScore > 0 ? (score / maxScore) >= 0.7 : false;
+
   const initials = report?.candidate_name ? report.candidate_name.split(' ').map((n: string) => n[0]).join('').substring(0,2).toUpperCase() : 'RK';
   const name = report?.candidate_name || "Rohit Kumar";
   const dateStr = report?.submitted_at ? new Date(report.submitted_at).toLocaleString() : 'N/A';
 
-  const testCases = report?.results || [];
 
   return (
     <div className="bg-[#F8FAFC] min-h-screen text-gray-800 font-sans pb-12">
@@ -209,7 +219,12 @@ export function ReportPage() {
                 <tbody className="divide-y divide-gray-100">
                   {testCases.map((tc: any, i: number) => {
                     const isPassedRow = tc.status === "passed";
-                    const evalText = tc.llm_status === "passed" ? "Correct" : (tc.llm_status === "failed" ? "Incorrect" : "Not Evaluated");
+                    const evalText =
+                      tc.llm_status === "verified_pass" ? "Verified Pass" :
+                      tc.llm_status === "verified_fail" ? "Verified Fail" :
+                      tc.llm_status === "skipped_playwright_passed" ? "Passed (no LLM check needed)" :
+                      tc.llm_status === "error" ? "LLM Error" :
+                      "Not Evaluated";
                     const statusText = isPassedRow ? "Passed" : "Failed";
                     const testName = tc.assertion_check_type ? tc.assertion_check_type.replace('_', ' ') : 'Test Case';
                     const inputVal = tc.assertion_trigger ? `${tc.assertion_trigger} on ${tc.assertion_trigger_selector}` : 'N/A';
@@ -219,7 +234,7 @@ export function ReportPage() {
                         <td className="px-4 py-3 text-gray-500">{i + 1}</td>
                         <td className="px-4 py-3 text-gray-800 capitalize">{testName}</td>
                         <td className="px-4 py-3 text-gray-600 font-mono text-xs bg-gray-50 rounded mx-2 my-2">{inputVal}</td>
-                        <td className={`px-4 py-3 ${evalText === 'Incorrect' ? 'text-red-500' : 'text-gray-800'}`}>{evalText}</td>
+                        <td className={`px-4 py-3 ${tc.llm_status === 'verified_fail' ? 'text-red-500' : 'text-gray-800'}`}>{evalText}</td>
                         <td className="px-4 py-3">
                           <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${isPassedRow ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                             {isPassedRow ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
@@ -310,7 +325,7 @@ export function ReportPage() {
                   </div>
                   <div className="flex items-center justify-between text-sm opacity-60">
                     <div className="flex items-center gap-2"><div className="w-2.5 h-2.5 rounded-full bg-gray-300" /> <span className="text-gray-600">Not Evaluated</span></div>
-                    <span className="font-bold text-gray-800">0 (0%)</span>
+                    <span className="font-bold text-gray-800">{tcNotEvaluatedCount} ({tcNotEvaluatedRate}%)</span>
                   </div>
                 </div>
               </div>

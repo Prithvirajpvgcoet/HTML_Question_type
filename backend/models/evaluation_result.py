@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 import enum
 from datetime import datetime
 from sqlalchemy import String, Integer, DateTime, Text, ForeignKey
@@ -14,9 +14,16 @@ class TCStatus(str, enum.Enum):
 
 
 class LLMStatus(str, enum.Enum):
-    passed = "passed"
-    failed = "failed"
-    not_evaluated = "not_evaluated"
+    # Playwright passed cleanly — LLM call was intentionally skipped
+    skipped_playwright_passed = "skipped_playwright_passed"
+    # LLM ran and confirmed the candidate's intent
+    verified_pass = "verified_pass"
+    # LLM ran and disagreed with the candidate's intent
+    verified_fail = "verified_fail"
+    # LLM call itself crashed / timed out
+    error = "error"
+    # Default: assertion was never evaluated at all (no playwright run yet)
+    not_run = "not_run"
 
 
 class ReviewFlag(str, enum.Enum):
@@ -48,7 +55,7 @@ class EvaluationResult(Base):
 
     # LLM result
     llm_status: Mapped[LLMStatus] = mapped_column(
-        SAEnum(LLMStatus), default=LLMStatus.not_evaluated
+        SAEnum(LLMStatus), default=LLMStatus.not_run
     )
     llm_evidence_text: Mapped[str] = mapped_column(Text, nullable=True)
 

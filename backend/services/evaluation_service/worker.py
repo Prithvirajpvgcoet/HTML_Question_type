@@ -4,6 +4,7 @@ from datetime import datetime
 from sqlalchemy.future import select
 from database import AsyncSessionLocal
 from models import Submission, Assertion, EvaluationResult, TCStatus, SubmissionStatus, Question
+from models.evaluation_result import LLMStatus
 
 from services.evaluation_service.runner import evaluate_submission
 from services.scoring_service.llm_scorer import score_with_llm, verify_testcase_with_llm
@@ -75,9 +76,6 @@ async def process_evaluation_task(submission_id: str):
             tc_points_earned = 0
             tc_passed_count = 0
 
-            from services.scoring_service.llm_scorer import verify_testcase_with_llm
-            from models.evaluation_result import LLMStatus
-            
             # Map assertions for quick lookup
             assertion_map = {a.id: a for a in assertions}
             
@@ -91,22 +89,31 @@ async def process_evaluation_task(submission_id: str):
                     points_awarded=r["points_awarded"]
                 )
                 
-                # LLM Verification for failed cases
-                if not r["passed"] and question:
-                    # Look up the original assertion
+                if r["passed"]:
+                    # BUG-5: Playwright passed cleanly — skip LLM, set explicit status
+                    eval_record.llm_status = LLMStatus.skipped_playwright_passed
+                    eval_record.llm_evidence_text = "Playwright check passed; LLM verification not needed."
+                elif question:
+                    # LLM Verification for failed cases only
                     a_model = assertion_map.get(r["assertion_id"])
                     if a_model:
-                        a_dict = {"expected_result": a_model.expected_result}
-                        verify_res = await verify_testcase_with_llm(submission, question, a_dict, r["actual_value"])
-                        eval_record.llm_status = LLMStatus.passed if verify_res.get("passed") else LLMStatus.failed
-                        eval_record.llm_evidence_text = verify_res.get("reasoning", "")
-                        
-                        # Overwrite Playwright failure if LLM validates semantic intent
-                        if eval_record.llm_status == LLMStatus.passed:
-                            eval_record.tc_status = TCStatus.passed
-                            r["passed"] = True
-                            r["points_awarded"] = getattr(a_model, "points", 10)
-                            eval_record.points_awarded = r["points_awarded"]
+                        try:
+                            a_dict = {"expected_result": a_model.expected_result}
+                            verify_res = await verify_testcase_with_llm(submission, question, a_dict, r["actual_value"])
+                            if verify_res.get("passed"):
+                                eval_record.llm_status = LLMStatus.verified_pass
+                                # Overwrite Playwright failure if LLM validates semantic intent
+                                eval_record.tc_status = TCStatus.passed
+                                r["passed"] = True
+                                r["points_awarded"] = getattr(a_model, "points", 10)
+                                eval_record.points_awarded = r["points_awarded"]
+                            else:
+                                eval_record.llm_status = LLMStatus.verified_fail
+                            eval_record.llm_evidence_text = verify_res.get("reasoning", "")
+                        except Exception as llm_err:
+                            logger.warning(f"LLM verify failed for assertion {r['assertion_id']}: {llm_err}")
+                            eval_record.llm_status = LLMStatus.error
+                            eval_record.llm_evidence_text = f"LLM error: {llm_err}"
                 
                 tc_points_earned += r["points_awarded"]
                 if r["passed"]:
@@ -117,23 +124,32 @@ async def process_evaluation_task(submission_id: str):
 
             from services.scoring_service.llm_scorer import generate_feedback
             
+            from models.submission import SubmissionLLMStatus
+            
             # 6. Run LLM Semantic Scoring (the remaining 50%)
             llm_score = 0
             if question:
-                llm_result = await score_with_llm(submission, question)
-                # Clamp score between 0 and 50
-                llm_score = min(max(int(llm_result.get("score", 0)), 0), 50)
-                
-                # Merge strengths and improvements into the breakdown JSON for the frontend
-                breakdown_data = llm_result.get("breakdown", {})
-                breakdown_data["strengths"] = llm_result.get("strengths", [])
-                breakdown_data["improvements"] = llm_result.get("improvements", [])
-                submission.ai_feedback_breakdown = json.dumps(breakdown_data)
-                
-                feedback_text = await generate_feedback(llm_result, tc_passed_count, len(assertions))
-                submission.ai_feedback_text = feedback_text
-                
-                submission.ai_confidence = "high" if llm_score >= 35 else "medium" if llm_score >= 20 else "low"
+                if tc_passed_count < len(assertions):
+                    submission.llm_status = SubmissionLLMStatus.skipped_due_to_failure
+                    submission.ai_feedback_breakdown = "{}"
+                    submission.ai_feedback_text = "Skipped AI Semantic Evaluation due to failing functional checks."
+                    submission.ai_confidence = "high"
+                else:
+                    submission.llm_status = SubmissionLLMStatus.evaluated
+                    llm_result = await score_with_llm(submission, question)
+                    # Clamp score between 0 and 50
+                    llm_score = min(max(int(llm_result.get("score", 0)), 0), 50)
+                    
+                    # Merge strengths and improvements into the breakdown JSON for the frontend
+                    breakdown_data = llm_result.get("breakdown", {})
+                    breakdown_data["strengths"] = llm_result.get("strengths", [])
+                    breakdown_data["improvements"] = llm_result.get("improvements", [])
+                    submission.ai_feedback_breakdown = json.dumps(breakdown_data)
+                    
+                    feedback_text = await generate_feedback(llm_result, tc_passed_count, len(assertions))
+                    submission.ai_feedback_text = feedback_text
+                    
+                    submission.ai_confidence = "high" if llm_score >= 35 else "medium" if llm_score >= 20 else "low"
 
             submission.tc_passed = tc_passed_count
             submission.tc_total = len(assertions)
