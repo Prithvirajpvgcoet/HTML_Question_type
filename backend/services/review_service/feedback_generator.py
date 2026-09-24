@@ -1,6 +1,10 @@
 from config import settings
 from ai.llm_client.client import client  # shared Mistral client instance
 from ai.llm_client.retry import with_retry
+from pydantic import BaseModel
+class FeedbackResponse(BaseModel):
+    feedback: str
+
 
 PROMPT = """
 You are an expert technical interviewer. You have just automatically graded a candidate's HTML/CSS/JS test.
@@ -16,11 +20,10 @@ async def generate_eval_feedback(html: str, css: str, js: str, eval_results: lis
     ])
 
     try:
-        response = await with_retry(lambda: client.chat.complete_async(
-            model=settings.mistral_model,
-            messages=[
-                {"role": "system", "content": PROMPT},
-                {"role": "user", "content": f"Candidate HTML:
+        from ai.llm_client.client import call_llm_structured
+        result = await call_llm_structured(
+            system_prompt=PROMPT,
+            user_message=f"Candidate HTML:
 {html}
 
 CSS:
@@ -30,13 +33,13 @@ JS:
 {js}
 
 Results:
-{results_text}"}
-            ],
-            temperature=0.3,
-            max_tokens=150,
-        ))
+{results_text}",
+            schema=FeedbackResponse,
+            model=settings.llm_model_scoring,
+            thinking_level="minimal"
+        )
 
-        content = response.choices[0].message.content
+        content = result.get("feedback")
         if not content or not content.strip():
             return "Evaluation complete. Feedback generation was skipped."
         return content.strip()

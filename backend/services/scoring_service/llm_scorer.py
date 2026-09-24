@@ -1,85 +1,93 @@
-import json
+﻿import json
 import re
 from config import settings
-from ai.llm_client.client import client  # shared Mistral client instance
-from ai.llm_client.retry import with_retry
 from models import Question, Submission
+from pydantic import BaseModel, Field
+from typing import Literal
 
-SCORING_PROMPT = """
+class VerifyResult(BaseModel):
+    assertion_id: str
+    passed: bool
+    reasoning: str
+
+class BatchVerifyResult(BaseModel):
+    results: list[VerifyResult]
+
+class LLMScore(BaseModel):
+    score: int
+    breakdown: dict[str, int]
+    reasoning: str
+    strengths: list[str] = Field(default_factory=list)
+    improvements: list[str] = Field(default_factory=list)
+
+SCORING_PROMPT = \"\"\"
 You are a senior frontend code reviewer.
 You will review a candidate's HTML/CSS/JS submission for a given question.
 Score the submission out of 50 points across these 5 dimensions (10 pts each):
-1. Functional Correctness — Does it do what the question asks?
-2. Code Structure — Is HTML semantic, CSS organized, JS clean?
-3. Visual Design — Does the UI look reasonable and usable?
-4. Edge Cases — Are inputs validated / errors handled?
-5. Completeness — Are all parts of the question attempted?
+1. Functional Correctness - Does it do what the question asks?
+2. Code Structure - Is HTML semantic, CSS organized, JS clean?
+3. Visual Design - Does the UI look reasonable and usable?
+4. Edge Cases - Are inputs validated / errors handled?
+5. Completeness - Are all parts of the question attempted?
+\"\"\"
 
-Respond ONLY with a JSON object. Ensure the JSON is well-formed. Do not add markdown backticks outside the JSON.
-Format:
-{
-  "score": 38,
-  "breakdown": {
-    "functional": 9,
-    "structure": 8,
-    "design": 7,
-    "edge_cases": 7,
-    "completeness": 7
-  },
-  "reasoning": "2-sentence justification"
-}
-"""
+VERIFY_PROMPT = \"\"\"
+You are an AI assistant helping verify an automated UI test result.
+Sometimes the automated test (Playwright) fails because the candidate used a slightly different but semantically correct approach.
+
+Your task:
+Review the failed test cases. For each, determine if the candidate's code actually satisfies the requirement described.
+If the semantic intent is met despite the strict DOM check failing, mark it passed: true.
+Otherwise, mark it passed: false.
+\"\"\"
+
+async def verify_testcases_batch_with_llm(submission: Submission, question: Question, failed_cases: list[dict]) -> dict[str, dict]:
+    if not failed_cases:
+        return {}
+
+    cases_text = ""
+    for idx, fc in enumerate(failed_cases):
+        cases_text += f"Case {idx + 1}:\\nAssertion ID: {fc['assertion_id']}\\nRequirement: {fc['expected_result']}\\nAutomated Result: {fc['actual_result']}\\n\\n"
+
+    user_message = f"Candidate HTML/JS:\\n{submission.submitted_html}\\n{submission.submitted_js}\\n\\nEvaluate the following failed cases:\\n\\n{cases_text}"
+
+    try:
+        from ai.llm_client.client import call_llm_structured
+        response = await call_llm_structured(
+            system_prompt=VERIFY_PROMPT,
+            user_message=user_message,
+            schema=BatchVerifyResult,
+            model=settings.llm_model_scoring,
+            thinking_level="minimal"
+        )
+        
+        results_map = {}
+        for r in response.get("results", []):
+            results_map[r["assertion_id"]] = {"passed": r["passed"], "reasoning": r["reasoning"]}
+        return results_map
+    except Exception as e:
+        print(f"Batch verify failed: {e}")
+        return {fc['assertion_id']: {"passed": False, "reasoning": "LLM verification unavailable."} for fc in failed_cases}
 
 async def score_with_llm(submission: Submission, question: Question) -> dict:
+    user_content = f"Question: {question.title}\\n{question.description_html}\\n\\nCandidate Code:\\nHTML:\\n{submission.submitted_html}\\n\\nCSS:\\n{submission.submitted_css}\\n\\nJS:\\n{submission.submitted_js}"
+    
     try:
-        response = await with_retry(lambda: client.chat.complete_async(
-            model=settings.mistral_model,
-            messages=[
-                {"role": "system", "content": SCORING_PROMPT},
-                {"role": "user", "content": f"Question: {question.title}\nDescription: {question.description_html}\n\nCandidate HTML:\n{submission.submitted_html}\n\nCandidate CSS:\n{submission.submitted_css}\n\nCandidate JS:\n{submission.submitted_js}"}
-            ],
-            temperature=0.2,
-            max_tokens=400,
-            response_format={"type": "json_object"},
-        ))
-        content = response.choices[0].message.content
-        print('CONTENT:', content)
-        # Non-greedy match to avoid spanning multiple JSON objects if the
-        # model wraps the JSON in any stray text.
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
-        return {"score": 48, "breakdown": {"functional": 10, "structure": 10, "design": 10, "edge_cases": 8, "completeness": 10}, "reasoning": "The code successfully implements the requirements and edge cases are handled well."}
+        from ai.llm_client.client import call_llm_structured
+        result = await call_llm_structured(
+            system_prompt=SCORING_PROMPT,
+            user_message=user_content,
+            schema=LLMScore,
+            model=settings.llm_model_scoring,
+            thinking_level="minimal"
+        )
+        return result
     except Exception as e:
-        print(f"LLM Scoring Error: {e}")
-        return {"score": 0, "breakdown": {"functional": 0, "structure": 0, "design": 0, "edge_cases": 0, "completeness": 0}, "reasoning": "AI evaluation failed."}
-
-VERIFY_PROMPT = """
-You are verifying an automated test case that failed.
-Did the candidate's code logically accomplish the requirement, even if the strict automated test failed?
-Respond with JSON: {"passed": true/false, "reasoning": "1 sentence explanation"}
-"""
-
-async def verify_testcase_with_llm(submission: Submission, question: Question, assertion: dict, actual_result: str) -> dict:
-    try:
-        response = await with_retry(lambda: client.chat.complete_async(
-            model=settings.mistral_model,
-            messages=[
-                {"role": "system", "content": VERIFY_PROMPT},
-                {"role": "user", "content": f"Requirement: {assertion['expected_result']}\n\nCandidate HTML/JS:\n{submission.submitted_html}\n{submission.submitted_js}\n\nAutomated test result: {actual_result}\n\nDid they actually meet the requirement?"}
-            ],
-            temperature=0.1,
-            max_tokens=150,
-            response_format={"type": "json_object"},
-        ))
-        content = response.choices[0].message.content
-        print('CONTENT:', content)
-        match = re.search(r'\{.*\}', content, re.DOTALL)
-        if match:
-            return json.loads(match.group(0))
-    except Exception as e:
-        pass
-    return {"passed": True, "reasoning": "Automated evaluation verified by LLM: Logically correct."}
+        print(f"score_with_llm failed: {e}")
+        return {
+            "score": 0,
+            "breakdown": {"functional": 0, "structure": 0, "design": 0, "edge_cases": 0, "completeness": 0},
+            "reasoning": "Scoring failed.",
+            "strengths": [],
+            "improvements": []
+        }

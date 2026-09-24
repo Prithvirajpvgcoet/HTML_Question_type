@@ -7,7 +7,7 @@ from models import Submission, Assertion, EvaluationResult, TCStatus, Submission
 from models.evaluation_result import LLMStatus
 
 from services.evaluation_service.runner import evaluate_submission
-from services.scoring_service.llm_scorer import score_with_llm, verify_testcase_with_llm
+from services.scoring_service.llm_scorer import score_with_llm, verify_testcases_batch_with_llm
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,21 @@ async def process_evaluation_task(submission_id: str):
 
             # Map assertions for quick lookup
             assertion_map = {a.id: a for a in assertions}
+            # Collect failed cases for batch processing
+            failed_cases = []
+            for r in results:
+                if not r["passed"] and question:
+                    a_model = assertion_map.get(r["assertion_id"])
+                    if a_model:
+                        failed_cases.append({
+                            "assertion_id": r["assertion_id"],
+                            "expected_result": a_model.expected_result,
+                            "actual_result": r["actual_value"]
+                        })
             
+            # Batch verify failed cases
+            batch_results = await verify_testcases_batch_with_llm(submission, question, failed_cases)
+
             for r in results:
                 eval_record = EvaluationResult(
                     submission_id=submission.id,
@@ -90,30 +104,25 @@ async def process_evaluation_task(submission_id: str):
                 )
                 
                 if r["passed"]:
-                    # BUG-5: Playwright passed cleanly — skip LLM, set explicit status
+                    # BUG-5: Playwright passed cleanly - skip LLM, set explicit status
                     eval_record.llm_status = LLMStatus.skipped_playwright_passed
                     eval_record.llm_evidence_text = "Playwright check passed; LLM verification not needed."
-                elif question:
-                    # LLM Verification for failed cases only
+                elif question and r["assertion_id"] in batch_results:
                     a_model = assertion_map.get(r["assertion_id"])
-                    if a_model:
-                        try:
-                            a_dict = {"expected_result": a_model.expected_result}
-                            verify_res = await verify_testcase_with_llm(submission, question, a_dict, r["actual_value"])
-                            if verify_res.get("passed"):
-                                eval_record.llm_status = LLMStatus.verified_pass
-                                # Overwrite Playwright failure if LLM validates semantic intent
-                                eval_record.tc_status = TCStatus.passed
-                                r["passed"] = True
-                                r["points_awarded"] = getattr(a_model, "points", 10)
-                                eval_record.points_awarded = r["points_awarded"]
-                            else:
-                                eval_record.llm_status = LLMStatus.verified_fail
-                            eval_record.llm_evidence_text = verify_res.get("reasoning", "")
-                        except Exception as llm_err:
-                            logger.warning(f"LLM verify failed for assertion {r['assertion_id']}: {llm_err}")
-                            eval_record.llm_status = LLMStatus.error
-                            eval_record.llm_evidence_text = f"LLM error: {llm_err}"
+                    verify_res = batch_results[r["assertion_id"]]
+                    
+                    if verify_res.get("passed"):
+                        eval_record.llm_status = LLMStatus.verified_pass
+                        # Overwrite Playwright failure if LLM validates semantic intent
+                        eval_record.tc_status = TCStatus.passed
+                        r["passed"] = True
+                        r["points_awarded"] = getattr(a_model, "points", 10) if a_model else 10
+                        eval_record.points_awarded = r["points_awarded"]
+                    else:
+                        eval_record.llm_status = LLMStatus.verified_fail
+                    eval_record.llm_evidence_text = verify_res.get("reasoning", "")
+                elif not question:
+                    pass
                 
                 tc_points_earned += r["points_awarded"]
                 if r["passed"]:
