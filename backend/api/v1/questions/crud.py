@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from database import get_db
 from models import Question, Assertion
 from models.question import ValidationStatus
-from services.assertion_service.generator import generate_assertions_from_llm
+from services.assertion_service.generator import generate_assertions_from_llm, generate_edge_cases_from_llm
 from services.evaluation_service.runner import evaluate_submission
 
 logger = logging.getLogger(__name__)
@@ -129,6 +129,34 @@ async def _validate_against_reference(
             "total_assertions": len(results)
         }
     )
+
+
+# BUG-3: Generate edge-case suggestions without saving them
+@router.post("/{question_id}/generate-edge-cases")
+async def generate_edge_cases(question_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # Fetch existing assertions to pass as context
+    a_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
+    existing = [
+        {"check_type": a.check_type, "expected_result": a.expected_result}
+        for a in a_res.scalars().all()
+    ]
+
+    try:
+        suggestions = await generate_edge_cases_from_llm(
+            title=q.title,
+            description=q.description_html,
+            existing_assertions=existing
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM edge-case generation failed: {e}")
+
+    # Return suggestions only — caller decides whether to save
+    return {"suggestions": suggestions}
 
 
 @router.post("/{question_id}/generate-assertions")

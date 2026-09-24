@@ -70,7 +70,7 @@ export function ReportPage() {
             <span className="font-semibold text-gray-900">AI Evaluation</span>
           </div>
           <div className="flex gap-3">
-            <button className="flex items-center gap-2 border border-blue-200 text-blue-600 px-4 py-1.5 rounded-md text-sm font-semibold hover:bg-blue-50 transition-colors">
+            <button onClick={() => window.print()} className="flex items-center gap-2 border border-blue-200 text-blue-600 px-4 py-1.5 rounded-md text-sm font-semibold hover:bg-blue-50 transition-colors" title="Print or save as PDF">
               <Download className="w-4 h-4" /> Download Report
             </button>
             <button onClick={toggleReview} className="bg-[#FF5722] hover:bg-[#F4511E] text-white px-4 py-1.5 rounded-md text-sm font-semibold transition-colors">
@@ -164,6 +164,19 @@ export function ReportPage() {
         </div>
       </div>
 
+      {/* BUG-11: Timeline empty state */}
+      {activeTab === 'timeline' && (
+        <div className="p-8 max-w-[1600px] mx-auto">
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-12 flex flex-col items-center text-center">
+            <div className="w-16 h-16 bg-gray-100 rounded-full flex items-center justify-center mb-4">
+              <svg className="w-8 h-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+            </div>
+            <h3 className="text-lg font-bold text-gray-700 mb-2">Timeline Coming Soon</h3>
+            <p className="text-sm text-gray-400 max-w-xs">Detailed event-by-event activity tracking for this submission will appear here in a future release.</p>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
       {activeTab === 'code' && (
         <div className="p-8 max-w-[1600px] mx-auto">
@@ -199,12 +212,12 @@ export function ReportPage() {
                 </div>
                 <p className="text-sm text-gray-500">The candidate's solution was evaluated using AI-generated test cases and LLM-based verification.</p>
               </div>
-              <button className="flex items-center gap-2 text-blue-600 border border-blue-200 px-4 py-1.5 rounded-md text-sm font-semibold hover:bg-blue-50 transition-colors">
+              <button onClick={() => document.getElementById('tc-table')?.scrollIntoView({ behavior: 'smooth' })} className="flex items-center gap-2 text-blue-600 border border-blue-200 px-4 py-1.5 rounded-md text-sm font-semibold hover:bg-blue-50 transition-colors">
                 <Eye className="w-4 h-4" /> View All Test Cases
               </button>
             </div>
 
-            <div className="overflow-x-auto rounded-lg border border-gray-100">
+            <div id="tc-table" className="overflow-x-auto rounded-lg border border-gray-100">
               <table className="w-full text-sm text-left">
                 <thead className="bg-[#F8FAFC] text-gray-700 font-semibold border-b border-gray-200">
                   <tr>
@@ -337,9 +350,7 @@ export function ReportPage() {
                 <div className="pl-8">
                   <h4 className="font-bold text-gray-900 text-sm mb-1">Evaluation Methodology</h4>
                   <p className="text-xs text-gray-500 leading-relaxed mb-3">AI-generated test cases are created to cover standard, edge, and hidden scenarios. The candidate's output is verified using an LLM to ensure semantic correctness and logical accuracy.</p>
-                  <button className="text-blue-600 border border-blue-200 bg-white px-3 py-1.5 rounded-md text-xs font-semibold hover:bg-blue-50 transition-colors">
-                    View Methodology
-                  </button>
+                  {/* View Methodology button removed — follow-up ticket for static docs page */}
                 </div>
               </div>
 
@@ -419,9 +430,7 @@ export function ReportPage() {
                 <p className="text-xs text-gray-600 leading-relaxed mb-3">
                   The solution is evaluated using LLM-based semantic verification, which checks correctness, edge case handling, code quality, and output logic against AI-generated test cases.
                 </p>
-                <button className="text-blue-600 border border-blue-200 bg-white px-3 py-1.5 rounded-md text-xs font-semibold hover:bg-blue-50 transition-colors block ml-auto mt-2">
-                  Learn More
-                </button>
+                {/* Learn More button removed — follow-up ticket for static docs page */}
               </div>
             </div>
 

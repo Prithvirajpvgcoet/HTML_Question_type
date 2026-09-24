@@ -29,14 +29,23 @@ export function AiAssertionsTab({ questionId, onBack, onNext }: { questionId: st
     if (questionId) fetchAssertions();
   }, [questionId]);
 
+  const [toast, setToast] = useState<string | null>(null);
+  const showToast = (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3500); };
+
   const handleGenerateEdgeCases = async () => {
     setIsGenerating(true);
     try {
       const res = await api.post(`/questions/${questionId}/generate-edge-cases`);
-      setAssertions(prev => [...prev, ...res.data.assertions]);
-    } catch (e) {
+      const suggestions: Assertion[] = res.data.suggestions || [];
+      // Save each suggestion as a real assertion via existing endpoint
+      for (const s of suggestions) {
+        await api.post(`/questions/${questionId}/assertions`, s);
+      }
+      await fetchAssertions();
+      showToast(`${suggestions.length} edge case${suggestions.length !== 1 ? 's' : ''} added.`);
+    } catch (e: any) {
       console.error(e);
-      alert("Failed to generate edge cases.");
+      showToast(e?.response?.data?.detail || "Failed to generate edge cases.");
     } finally {
       setIsGenerating(false);
     }
@@ -97,8 +106,27 @@ export function AiAssertionsTab({ questionId, onBack, onNext }: { questionId: st
     }
   };
 
+  // BUG-10: Save just marks this tab complete and advances — assertions are already persisted server-side
+  const [isSaving, setIsSaving] = useState(false);
+  const handleSaveAll = async () => {
+    if (assertions.length === 0) { showToast("Generate assertions before saving."); return; }
+    setIsSaving(true);
+    try {
+      showToast("Assertions saved ✓");
+      onNext();
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
+      {/* Toast */}
+      {toast && (
+        <div className="fixed top-5 right-5 z-50 bg-gray-900 text-white text-sm px-4 py-2.5 rounded-lg shadow-lg animate-fade-in">
+          {toast}
+        </div>
+      )}
       {/* Generate Banner */}
       {assertions.length === 0 && !isGenerating && (
         <div className="bg-blue-50 rounded-lg p-6 flex justify-between items-center border border-blue-100">
@@ -203,7 +231,7 @@ export function AiAssertionsTab({ questionId, onBack, onNext }: { questionId: st
       <div className="flex justify-between pt-6 border-t border-gray-200 mt-8">
         <button onClick={onBack} className="px-6 py-2 border border-gray-300 rounded-full text-gray-600 font-medium hover:bg-gray-50">Back</button>
         <div className="flex gap-4">
-          <button className="px-6 py-2 border border-gray-300 rounded-full text-gray-600 font-medium hover:bg-gray-50">Save</button>
+          <button onClick={handleSaveAll} disabled={isSaving || assertions.length === 0} className="px-6 py-2 border border-gray-300 rounded-full text-gray-600 font-medium hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed">{isSaving ? "Saving…" : "Save"}</button>
           <button onClick={onNext} className="px-8 py-2 bg-imocha-orange text-white rounded-full font-medium hover:bg-orange-600 shadow-sm">Next</button>
         </div>
       </div>
