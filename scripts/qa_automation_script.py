@@ -2,7 +2,7 @@
 import time
 import sys
 
-BASE_URL = "http://localhost:8000/api/v1"
+BASE_URL = "http://localhost:8001/api/v1"
 
 QUESTIONS = [
     {
@@ -117,6 +117,9 @@ def run_tests():
             "submitted_css": q["css"],
             "submitted_js": q["js"]
         })
+        if resp.status_code != 200:
+            print(f"Error creating submission: {resp.text}")
+            continue
         sub_id = resp.json()["id"]
         print(f"Submission created ID: {sub_id}")
 
@@ -138,6 +141,10 @@ def run_tests():
                     break
         if not completed:
             print("Evaluation timed out.")
+            
+        print("Pacing: sleeping for 6 seconds to respect Gemini 10 RPM free tier limits...")
+        time.sleep(6)
+
 
     print("\nE2E Workflow Testing Complete.")
 
