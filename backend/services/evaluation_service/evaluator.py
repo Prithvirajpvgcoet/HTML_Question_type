@@ -33,6 +33,7 @@ class Assertion:
     points: int = 0
     group_id: Optional[str] = None
     sequence_order: Optional[int] = None
+    execution_mode: str = "sequential"
 
 @dataclass
 class AssertionResult:
@@ -331,8 +332,8 @@ class CandidateEvaluator:
         # Partition into groups. Default to sequential 'default_flow' unless explicitly isolated.
         groups = {}
         for a in assertions:
-            is_isolated = getattr(a, "execution_mode", "") == "isolated"
-            key = f"__solo_{a.id}" if is_isolated else (getattr(a, "group_id", None) or "default_flow")
+            is_isolated = a.execution_mode == "isolated"
+            key = f"__solo_{a.id}" if is_isolated else (a.group_id or "default_flow")
             if key not in groups:
                 groups[key] = []
             groups[key].append(a)

@@ -1,4 +1,4 @@
-﻿import re
+import re
 import asyncio
 from playwright.sync_api import sync_playwright
 from services.evaluation_service.evaluator import (
@@ -62,7 +62,8 @@ def _run_sync_evaluation(html: str, css: str, js: str, assertions: list) -> list
                 input_value="test",
                 points=a.get("points", 0),
                 group_id=a.get("group_id"),
-                sequence_order=a.get("sequence_order")
+                sequence_order=a.get("sequence_order"),
+                execution_mode=a.get("execution_mode", "sequential")
             ))
 
         try:
@@ -97,7 +98,8 @@ async def evaluate_submission(html: str, css: str, js: str, assertions: list) ->
             "wait_ms": getattr(a, "wait_ms", 0),
             "points": getattr(a, "points", 0),
             "group_id": getattr(a, "group_id", None),
-            "sequence_order": getattr(a, "sequence_order", None)
+            "sequence_order": getattr(a, "sequence_order", None),
+            "execution_mode": getattr(a, "execution_mode", "sequential")
         })
         
     return await asyncio.to_thread(

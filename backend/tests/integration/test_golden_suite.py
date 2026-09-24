@@ -179,3 +179,40 @@ def test_multifield_precondition_correct_set_passes(browser_context):
     result = evaluator.evaluate_submission(ref_html, '', ref_js, complete_assertions)
     assert result.total_points == 15
 
+def test_execution_mode_isolation(browser_context):
+    html = '''
+        <button id="toggleBtn">Off</button>
+    '''
+    js = '''
+        const btn = document.getElementById('toggleBtn');
+        btn.addEventListener('click', () => {
+            btn.textContent = btn.textContent === 'Off' ? 'On' : 'Off';
+        });
+    '''
+    
+    # We want three assertions:
+    # 1. Click toggle, check text is 'On' (sequential, group 'g1', order 1)
+    # 2. Page load, check text is 'Off' (isolated) - shouldn't see the click from 1
+    # 3. Click toggle, check text is 'Off' (sequential, group 'g1', order 2) - should see the click from 1
+    
+    assertions = [
+        Assertion(
+            id='a1', trigger=TriggerType.CLICK, trigger_selector='#toggleBtn',
+            check_type=CheckType.TEXT_CONTENT, check_selector='#toggleBtn',
+            expected_value='On', points=10, group_id='g1', sequence_order=1, execution_mode='sequential'
+        ),
+        Assertion(
+            id='a2', trigger=TriggerType.PAGE_LOAD, trigger_selector='',
+            check_type=CheckType.TEXT_CONTENT, check_selector='#toggleBtn',
+            expected_value='Off', points=10, group_id=None, sequence_order=None, execution_mode='isolated'
+        ),
+        Assertion(
+            id='a3', trigger=TriggerType.CLICK, trigger_selector='#toggleBtn',
+            check_type=CheckType.TEXT_CONTENT, check_selector='#toggleBtn',
+            expected_value='Off', points=10, group_id='g1', sequence_order=2, execution_mode='sequential'
+        )
+    ]
+    
+    evaluator = CandidateEvaluator(browser_context)
+    result = evaluator.evaluate_submission(html, '', js, assertions)
+    assert result.total_points == 30

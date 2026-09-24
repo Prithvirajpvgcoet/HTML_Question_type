@@ -57,7 +57,7 @@ class Assertion(Base):
         SAEnum(AssertionSource), default=AssertionSource.ai_generated
     )
     
-    execution_mode: Mapped[ExecutionMode] = mapped_column(SAEnum(ExecutionMode), default=ExecutionMode.isolated)
+    execution_mode: Mapped[ExecutionMode] = mapped_column(SAEnum(ExecutionMode), default=ExecutionMode.sequential)
     group_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     sequence_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     depends_on_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
