@@ -1,5 +1,6 @@
 from config import settings
 from ai.llm_client.client import client  # shared Mistral client instance
+from ai.llm_client.retry import with_retry
 
 PROMPT = """
 You are an expert technical interviewer. You have just automatically graded a candidate's HTML/CSS/JS test.
@@ -14,7 +15,7 @@ async def generate_eval_feedback(html: str, css: str, js: str, eval_results: lis
         for r in eval_results
     ])
 
-    response = await client.chat.complete_async(
+    response = await with_retry(lambda: client.chat.complete_async(
         model=settings.mistral_model,
         messages=[
             {"role": "system", "content": PROMPT},
@@ -22,7 +23,7 @@ async def generate_eval_feedback(html: str, css: str, js: str, eval_results: lis
         ],
         temperature=0.3,
         max_tokens=150,
-    )
+    ))
 
     content = response.choices[0].message.content
     if not content or not content.strip():

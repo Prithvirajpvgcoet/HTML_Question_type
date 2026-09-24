@@ -2,6 +2,7 @@ from config import settings
 import json
 import re
 from ai.llm_client.client import client
+from ai.llm_client.retry import with_retry
 
 
 PROMPT = """You are a test automation engineer generating UI assertions for an HTML/CSS/JS coding question on an assessment platform.
@@ -95,7 +96,7 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
         user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
         user_content += "Respond with ONLY a JSON object, nothing else."
 
-        response = await client.chat.complete_async(
+        response = await with_retry(lambda: client.chat.complete_async(
             model=settings.mistral_model,
             messages=[
                 {"role": "system", "content": PROMPT},
@@ -104,7 +105,7 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
             temperature=0.0 if attempt == 0 else 0.2 * attempt, # Pinned to 0 on first attempt
             max_tokens=4096,
             response_format={"type": "json_object"}
-        )
+        ))
 
         raw = response.choices[0].message.content.strip()
 
@@ -180,12 +181,12 @@ async def generate_edge_cases_from_llm(title: str, description: str, existing_as
     Make them worth 5 points each.
     """
     try:
-        response = await client.chat.complete_async(
+        response = await with_retry(lambda: client.chat.complete_async(
             model=settings.mistral_model,
             messages=[{"role": "user", "content": edge_prompt}],
             temperature=0.3,
             max_tokens=800
-        )
+        ))
         content = response.choices[0].message.content
         match = re.search(r'\[.*\]', content, re.DOTALL)
         if match:

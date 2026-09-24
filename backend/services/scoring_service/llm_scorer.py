@@ -2,6 +2,7 @@ import json
 import re
 from config import settings
 from ai.llm_client.client import client  # shared Mistral client instance
+from ai.llm_client.retry import with_retry
 from models import Question, Submission
 
 SCORING_PROMPT = """
@@ -31,7 +32,7 @@ Format:
 
 async def score_with_llm(submission: Submission, question: Question) -> dict:
     try:
-        response = await client.chat.complete_async(
+        response = await with_retry(lambda: client.chat.complete_async(
             model=settings.mistral_model,
             messages=[
                 {"role": "system", "content": SCORING_PROMPT},
@@ -40,7 +41,7 @@ async def score_with_llm(submission: Submission, question: Question) -> dict:
             temperature=0.2,
             max_tokens=400,
             response_format={"type": "json_object"},
-        )
+        ))
         content = response.choices[0].message.content
         print('CONTENT:', content)
         # Non-greedy match to avoid spanning multiple JSON objects if the
@@ -64,7 +65,7 @@ Respond with JSON: {"passed": true/false, "reasoning": "1 sentence explanation"}
 
 async def verify_testcase_with_llm(submission: Submission, question: Question, assertion: dict, actual_result: str) -> dict:
     try:
-        response = await client.chat.complete_async(
+        response = await with_retry(lambda: client.chat.complete_async(
             model=settings.mistral_model,
             messages=[
                 {"role": "system", "content": VERIFY_PROMPT},
@@ -73,7 +74,7 @@ async def verify_testcase_with_llm(submission: Submission, question: Question, a
             temperature=0.1,
             max_tokens=150,
             response_format={"type": "json_object"},
-        )
+        ))
         content = response.choices[0].message.content
         print('CONTENT:', content)
         match = re.search(r'\{.*\}', content, re.DOTALL)
