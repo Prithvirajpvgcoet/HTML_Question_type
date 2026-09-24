@@ -1,37 +1,94 @@
+﻿import asyncio
 import json
-from mistralai import Mistral
+import logging
+import time
+from google import genai
+from google.genai import types
 from config import settings
 
-client = Mistral(api_key=settings.mistral_api_key)
+logger = logging.getLogger(__name__)
+
+# Initialize the global client
+client = genai.Client(api_key=settings.gemini_api_key)
+
+class TokenBucket:
+    """Asyncio token bucket rate limiter for RPM control."""
+    def __init__(self, capacity: int, fill_rate: float):
+        self.capacity = capacity
+        self.tokens = capacity
+        self.fill_rate = fill_rate
+        self.last_fill = time.monotonic()
+        self._lock = asyncio.Lock()
+
+    async def consume(self, tokens: int = 1):
+        while True:
+            async with self._lock:
+                now = time.monotonic()
+                elapsed = now - self.last_fill
+                
+                # Refill tokens
+                self.tokens = min(self.capacity, self.tokens + elapsed * self.fill_rate)
+                self.last_fill = now
+                
+                if self.tokens >= tokens:
+                    self.tokens -= tokens
+                    return
+                
+                # Calculate sleep time if we don't have enough tokens
+                sleep_time = (tokens - self.tokens) / self.fill_rate
+            
+            # Wait outside the lock so other tasks can proceed when ready
+            await asyncio.sleep(sleep_time)
+
+# Calculate tokens per second based on Requests Per Minute (RPM)
+_tps = settings.llm_rpm_limit / 60.0
+# Global rate limiter instance
+_rate_limiter = TokenBucket(capacity=settings.llm_rpm_limit, fill_rate=_tps)
 
 
 async def call_llm_structured(
     system_prompt: str,
     user_message: str,
-    temperature: float | None = None,
+    schema: type | dict,
     model: str | None = None,
-) -> dict:
+    thinking_level: str = "minimal"
+) -> dict | list:
     """
-    Call Mistral with JSON-mode output. Returns parsed dict.
-    The system prompt must instruct the model to respond only with JSON.
-
-    `model` lets a caller override settings.mistral_model for a single call
-    (e.g. if you later want a stronger model for assertion generation and a
-    cheaper one for scoring/feedback) without touching every call site.
+    Call Gemini with native JSON schema enforcement and explicit thinking levels.
+    Waits on a shared token bucket rate limiter to adhere to llm_rpm_limit.
     """
-    temp = temperature if temperature is not None else settings.llm_temperature
-    model_name = model or settings.mistral_model
+    # Wait for capacity in the rate limiter
+    await _rate_limiter.consume(1)
+    
+    model_name = model or settings.llm_model_scoring
 
-    response = await client.chat.complete_async(
-        model=model_name,
-        temperature=temp,
-        max_tokens=settings.llm_max_tokens,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_message},
-        ],
+    config = types.GenerateContentConfig(
+        system_instruction=system_prompt,
+        response_mime_type="application/json",
+        response_schema=schema,
+        thinking_config=types.ThinkingConfig(thinking_level=thinking_level),
+        temperature=settings.llm_temperature
     )
 
-    raw = response.choices[0].message.content
-    return json.loads(raw)
+    response = await client.aio.models.generate_content(
+        model=model_name,
+        contents=user_message,
+        config=config
+    )
+
+    # Log usage
+    if response.usage_metadata:
+        logger.info(
+            f"Usage [model={model_name}]: "
+            f"Input={response.usage_metadata.prompt_token_count}, "
+            f"Output={response.usage_metadata.candidates_token_count}"
+        )
+
+    # Parse response
+    raw = response.text
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        logger.error(f"Failed to parse JSON response from Gemini: {raw}")
+        raise ValueError("LLM did not return valid JSON despite schema enforcement.")
+
