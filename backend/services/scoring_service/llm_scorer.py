@@ -20,7 +20,7 @@ class LLMScore(BaseModel):
     strengths: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
 
-SCORING_PROMPT = \"\"\"
+SCORING_PROMPT = """
 You are a senior frontend code reviewer.
 You will review a candidate's HTML/CSS/JS submission for a given question.
 Score the submission out of 50 points across these 5 dimensions (10 pts each):
@@ -29,9 +29,9 @@ Score the submission out of 50 points across these 5 dimensions (10 pts each):
 3. Visual Design - Does the UI look reasonable and usable?
 4. Edge Cases - Are inputs validated / errors handled?
 5. Completeness - Are all parts of the question attempted?
-\"\"\"
+"""
 
-VERIFY_PROMPT = \"\"\"
+VERIFY_PROMPT = """
 You are an AI assistant helping verify an automated UI test result.
 Sometimes the automated test (Playwright) fails because the candidate used a slightly different but semantically correct approach.
 
@@ -39,7 +39,7 @@ Your task:
 Review the failed test cases. For each, determine if the candidate's code actually satisfies the requirement described.
 If the semantic intent is met despite the strict DOM check failing, mark it passed: true.
 Otherwise, mark it passed: false.
-\"\"\"
+"""
 
 async def verify_testcases_batch_with_llm(submission: Submission, question: Question, failed_cases: list[dict]) -> dict[str, dict]:
     if not failed_cases:

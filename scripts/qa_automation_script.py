@@ -105,7 +105,7 @@ def run_tests():
 
         # 3. Generate Assertions (AI)
         print("Generating AI Assertions...")
-        resp = requests.post(f"{BASE_URL}/questions/{q_id}/generate-assertions", timeout=120)
+        resp = requests.post(f"{BASE_URL}/questions/{q_id}/generate-assertions", timeout=300)
         print(f"Assertions generated: {resp.status_code}")
 
         # 4. Submit Candidate Code

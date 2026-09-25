@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 revision = 'e7f1c2d3a4b5'
-down_revision = 'd412bdb7a37a'
+down_revision = 'b2bea8624e10'
 branch_labels = None
 depends_on = None
 
@@ -21,6 +21,7 @@ def upgrade() -> None:
     op.execute("ALTER TYPE llmstatus ADD VALUE IF NOT EXISTS 'verified_fail'")
     op.execute("ALTER TYPE llmstatus ADD VALUE IF NOT EXISTS 'error'")
     op.execute("ALTER TYPE llmstatus ADD VALUE IF NOT EXISTS 'not_run'")
+    op.execute('COMMIT')
     # Migrate old values to new ones
     op.execute("""
         UPDATE evaluation_results
