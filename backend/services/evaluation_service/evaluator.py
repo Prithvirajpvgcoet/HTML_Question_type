@@ -366,7 +366,9 @@ class CandidateEvaluator:
         # Partition into groups. Default to sequential 'default_flow' unless explicitly isolated.
         groups = {}
         for a in assertions:
-            is_isolated = a.execution_mode == "isolated"
+            # Handle both string "isolated" and ExecutionMode.isolated (enum)
+            mode_val = a.execution_mode.value if hasattr(a.execution_mode, "value") else str(a.execution_mode)
+            is_isolated = mode_val == "isolated"
             key = f"__solo_{a.id}" if is_isolated else (a.group_id or "default_flow")
             if key not in groups:
                 groups[key] = []

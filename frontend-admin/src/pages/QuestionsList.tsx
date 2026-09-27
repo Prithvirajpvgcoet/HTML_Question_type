@@ -8,11 +8,27 @@ export function QuestionsList() {
   const [toast, setToast] = useState('');
 
   
-  const handleCopyLink = (id: string) => {
-    const url = `http://localhost:5174/test/${id}`;
-    navigator.clipboard.writeText(url);
-    setToast("Test Link Copied!");
-    setTimeout(() => setToast(''), 3000);
+  const handleCopyLink = async (id: string) => {
+    const candidateEmail = window.prompt("Enter candidate email to generate a secure invite link:");
+    if (!candidateEmail) return;
+    const candidateName = window.prompt("Enter candidate name:");
+    if (!candidateName) return;
+
+    try {
+      const res = await api.post("/invites", {
+        question_id: id,
+        candidate_name: candidateName,
+        candidate_email: candidateEmail,
+      });
+      const token = res.data.token;
+      const url = `http://localhost:5174/login/${token}`; // Use token in URL
+      navigator.clipboard.writeText(url);
+      setToast("Secure Test Link Copied!");
+      setTimeout(() => setToast(''), 3000);
+    } catch (e) {
+      console.error(e);
+      alert("Failed to generate invite token.");
+    }
   };
 
   const fetchQuestions = () => {

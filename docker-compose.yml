@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  backend:
+    build: 
+      context: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite+aiosqlite:///./data/database.db
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    volumes:
+      - ./data:/app/data
+
+  frontend-admin:
+    build:
+      context: ./frontend-admin
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+  frontend-candidate:
+    build:
+      context: ./frontend-candidate
+    ports:
+      - "5174:80"
+    depends_on:
+      - backend
+
+volumes:
+  data:

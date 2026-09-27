@@ -17,16 +17,17 @@ async def list_submissions(db: AsyncSession = Depends(get_db)):
 class CreateSubmissionReq(BaseModel):
     question_id: str
     candidate_name: str = "Test Candidate"
+    candidate_email: str | None = None
     submitted_html: str = ""
     submitted_css: str = ""
     submitted_js: str = ""
-
 
 @router.post("")
 async def create_submission(req: CreateSubmissionReq, db: AsyncSession = Depends(get_db)):
     sub = Submission(
         question_id=req.question_id,
         candidate_name=req.candidate_name,
+        candidate_email=req.candidate_email,
         submitted_html=req.submitted_html,
         submitted_css=req.submitted_css,
         submitted_js=req.submitted_js,

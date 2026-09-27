@@ -29,6 +29,33 @@ export function LivePreview({ html, css, js, className }: Props) {
   useEffect(() => {
     if (!iframeRef.current) return;
     
+    const consoleBridge = `
+      <script>
+        (function() {
+          const originalConsole = {
+            log: console.log,
+            warn: console.warn,
+            error: console.error
+          };
+          
+          function post(type, args) {
+            const msg = Array.from(args).map(a => 
+              typeof a === 'object' ? JSON.stringify(a) : String(a)
+            ).join(' ');
+            window.parent.postMessage({ type: 'console', level: type, text: msg }, '*');
+          }
+
+          console.log = function() { originalConsole.log.apply(console, arguments); post('log', arguments); };
+          console.warn = function() { originalConsole.warn.apply(console, arguments); post('warn', arguments); };
+          console.error = function() { originalConsole.error.apply(console, arguments); post('error', arguments); };
+          
+          window.addEventListener('error', function(e) {
+            window.parent.postMessage({ type: 'console', level: 'error', text: e.message }, '*');
+          });
+        })();
+      </script>
+    `;
+
     const srcDoc = `
       <!DOCTYPE html>
       <html>
@@ -37,6 +64,7 @@ export function LivePreview({ html, css, js, className }: Props) {
         </head>
         <body>
           ${html}
+          ${consoleBridge}
           <script>${protectLoops(js)}<\/script>
         </body>
       </html>

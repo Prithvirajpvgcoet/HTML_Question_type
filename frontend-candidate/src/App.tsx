@@ -1,4 +1,4 @@
-﻿import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { queryClient } from "./lib/queryClient";
 import { CandidateTestPage } from "./pages/CandidateTest/CandidateTestPage";
@@ -9,7 +9,7 @@ function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
-          <Route path="/login/:questionId" element={<CandidateLoginPage />} />
+          <Route path="/login/:token" element={<CandidateLoginPage />} />
           <Route path="/test/:questionId" element={<CandidateTestPage />} />
           <Route path="*" element={<div className="p-8 text-center text-gray-500">Candidate Portal - Please use a valid test link.</div>} />
         </Routes>

@@ -38,10 +38,34 @@ export function CandidateTestPage() {
   const [editorTheme, setEditorTheme] = useState<"Light" | "Dark">("Light");
 
   const [submitting, setSubmitting] = useState(false);
+  const [evalStep, setEvalStep] = useState(1);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [closeAttempted, setCloseAttempted] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [timeLeft, setTimeLeft] = useState(3600);
+
+  useEffect(() => {
+    if (submitting) {
+      setEvalStep(1);
+      const timers = [
+        setTimeout(() => setEvalStep(2), 2000), // Code Submitted -> Running Playwright
+        setTimeout(() => setEvalStep(3), 6000), // Running Playwright -> AI Semantic Review
+        setTimeout(() => setEvalStep(4), 10000) // AI Semantic Review -> Finalizing Report
+      ];
+      return () => timers.forEach(clearTimeout);
+    }
+  }, [submitting]);
+  const [consoleLogs, setConsoleLogs] = useState<{level: string, text: string}[]>([]);
+
+  useEffect(() => {
+    const handleMessage = (e: MessageEvent) => {
+      if (e.data && e.data.type === 'console') {
+        setConsoleLogs(prev => [...prev, { level: e.data.level, text: e.data.text }]);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   const codeRef = useRef({ html, css, js });
 
@@ -72,7 +96,7 @@ export function CandidateTestPage() {
 
   useEffect(() => {
     if (!autoRun) return;
-    const t = setTimeout(() => { setPreview({ html, css, js }); setHasRunOnce(true); }, 600);
+    const t = setTimeout(() => { setConsoleLogs([]); setPreview({ html, css, js }); setHasRunOnce(true); }, 600);
     return () => clearTimeout(t);
   }, [html, css, js, autoRun]);
 
@@ -84,6 +108,7 @@ export function CandidateTestPage() {
     `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 
   const handleRunCode = () => {
+    setConsoleLogs([]);
     setPreview({ html, css, js });
     setHasRunOnce(true);
     setActivePreviewTab("preview");
@@ -222,43 +247,6 @@ export function CandidateTestPage() {
         {/* ── MAIN CONTENT (column layout) ── */}
         <div className="flex-1 flex flex-col overflow-hidden">
 
-          {/* ── SECTION / QUESTION NAVIGATOR BAR ── */}
-          <div className="h-[52px] bg-white border-b border-gray-200 flex items-center px-5 shrink-0 gap-4">
-            <span className="text-xs text-gray-500 font-medium shrink-0">
-              Section 1 of 1 | HTML/CSS/JS Coding
-            </span>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-600">
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <span className="text-xs font-semibold text-gray-700">Question 1 of 1</span>
-              <button className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-600">
-                <ChevronRight className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Spacer */}
-            <div className="flex-1" />
-
-            {/* Pagination bubbles */}
-            <div className="flex items-center gap-1">
-              {[1].map((n) => (
-                <button
-                  key={n}
-                  className={`w-7 h-7 rounded-full text-xs font-semibold flex items-center justify-center transition-colors ${
-                    n === 1
-                      ? "bg-blue-600 text-white"
-                      : "text-gray-500 hover:bg-gray-100"
-                  }`}
-                >
-                  {n}
-                </button>
-              ))}
-            </div>
-            <button className="ml-2 p-1.5 text-gray-400 hover:text-gray-600 border border-gray-200 rounded">
-              <LayoutGrid className="w-4 h-4" />
-            </button>
-          </div>
 
           {/* ── THREE-COLUMN WORK AREA ── */}
           <div className="flex-1 flex overflow-hidden">
@@ -306,44 +294,7 @@ export function CandidateTestPage() {
                         <div className="text-blue-700 mt-0.5">Make sure your solution meets all the requirements before submitting.</div>
                       </div>
                     </div>
-                    {/* Expected Output */}
-                    <details open className="border border-gray-200 rounded-lg overflow-hidden">
-                      <summary className="flex items-center justify-between px-4 py-2.5 bg-gray-50 cursor-pointer select-none text-sm font-semibold text-gray-700 list-none">
-                        <div className="flex items-center gap-2">
-                          <Code2 className="w-4 h-4 text-gray-500" />
-                          Expected Output
-                        </div>
-                        <ChevronLeft className="w-4 h-4 rotate-90 text-gray-400" />
-                      </summary>
-                      <div className="p-4 space-y-3">
-                        <div>
-                          <p className="text-xs font-semibold text-gray-600 mb-1.5">Initial Screen:</p>
-                          <div className="border border-gray-200 rounded p-3 bg-white text-xs font-mono text-blue-600 space-y-2">
-                            <div className="flex justify-between">
-                              <span>anti-clockwise</span>
-                              <span>clockwise</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>toggle border color</span>
-                              <span>toggle border style</span>
-                            </div>
-                          </div>
-                        </div>
-                        <div>
-                          <p className="text-xs font-semibold text-gray-600 mb-1.5">After clicking clockwise:</p>
-                          <div className="border border-gray-200 rounded p-3 bg-white text-xs font-mono text-blue-600 space-y-2">
-                            <div className="flex justify-between">
-                              <span>toggle border color</span>
-                              <span>anti-clockwise</span>
-                            </div>
-                            <div className="flex justify-between">
-                              <span>toggle border style</span>
-                              <span>clockwise</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    </details>
+
                   </>
                 )}
 
@@ -453,14 +404,7 @@ export function CandidateTestPage() {
                 {/* Spacer */}
                 <div className="flex-1" />
 
-                {/* Previous / Next */}
-                <button className="px-4 py-2 text-sm font-medium text-gray-600 border border-gray-200 rounded-md hover:bg-gray-50 transition-colors">
-                  Previous
-                </button>
-                <button className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-md transition-colors">
-                  Next Question
-                  <ChevronRight className="w-4 h-4" />
-                </button>
+
               </div>
             </div>
 
@@ -526,8 +470,18 @@ export function CandidateTestPage() {
                         </div>
                       )
                     ) : (
-                      <div className="h-full bg-gray-950 p-4 font-mono text-xs text-green-400">
-                        <span className="text-gray-500">{"> "}</span>Console output will appear here after running code...
+                      <div className="h-full bg-gray-950 p-4 font-mono text-xs overflow-y-auto space-y-2">
+                        {consoleLogs.length === 0 ? (
+                          <div className="text-gray-500">
+                            <span>{"> "}</span>Console output will appear here after running code...
+                          </div>
+                        ) : (
+                          consoleLogs.map((log, i) => (
+                            <div key={i} className={`pb-1 border-b border-gray-800 ${log.level === 'error' ? 'text-red-400' : log.level === 'warn' ? 'text-yellow-400' : 'text-green-400'}`}>
+                              <span className="text-gray-500 mr-2">{">"}</span>{log.text}
+                            </div>
+                          ))
+                        )}
                       </div>
                     )}
                   </div>
@@ -573,11 +527,63 @@ export function CandidateTestPage() {
 
       {/* ═══ EVALUATION MODAL ═══ */}
       {submitting && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-10 text-center">
-            <div className="w-14 h-14 border-4 border-gray-100 border-t-[#FF6B35] rounded-full animate-spin mx-auto mb-5" />
-            <h3 className="text-lg font-bold text-gray-900 mb-2">Evaluating Solution</h3>
-            <p className="text-gray-500 text-sm">Running automated Playwright checks and AI semantic review...</p>
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center backdrop-blur-sm transition-opacity">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-8 overflow-hidden relative">
+            
+            {/* Header */}
+            <div className="text-center mb-8">
+              <div className="w-16 h-16 bg-orange-50 rounded-full flex items-center justify-center mx-auto mb-4 border border-orange-100">
+                <div className="w-8 h-8 border-4 border-orange-200 border-t-[#FF6B35] rounded-full animate-spin" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Evaluating Solution</h3>
+              <p className="text-gray-500 text-sm">Please do not close this window.</p>
+            </div>
+
+            {/* Stepper (fake progression driven by evalStep) */}
+            <div className="space-y-5 relative before:absolute before:inset-0 before:ml-[15px] before:-translate-x-px md:before:mx-auto md:before:translate-x-0 before:h-full before:w-0.5 before:bg-gradient-to-b before:from-transparent before:via-slate-300 before:to-transparent">
+              
+              {/* Step 1: Code Submitted */}
+              <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 transition-colors ${evalStep >= 1 ? 'bg-green-500 text-white' : 'bg-gray-200 text-gray-400'}`}>
+                  {evalStep > 1 ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg> : <div className="w-2.5 h-2.5 bg-white rounded-full animate-ping" />}
+                </div>
+                <div className={`w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] bg-white p-3 rounded-lg border shadow-sm transition-all ${evalStep === 1 ? 'border-blue-100 bg-blue-50/30' : 'border-gray-100'}`}>
+                  <p className="font-semibold text-gray-900 text-sm">Code Submitted</p>
+                </div>
+              </div>
+
+              {/* Step 2: Running Playwright */}
+              <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 transition-colors ${evalStep > 2 ? 'bg-green-500 text-white' : evalStep === 2 ? 'bg-blue-500 text-white animate-pulse' : 'bg-gray-200 text-gray-400'}`}>
+                  {evalStep > 2 ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg> : evalStep === 2 ? <div className="w-2.5 h-2.5 bg-white rounded-full" /> : <div className="w-2.5 h-2.5 bg-gray-400 rounded-full" />}
+                </div>
+                <div className={`w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] bg-white p-3 rounded-lg border shadow-sm transition-all ${evalStep === 2 ? 'border-blue-100 bg-blue-50/30' : evalStep > 2 ? 'border-gray-100' : 'border-transparent opacity-40'}`}>
+                  <p className="font-semibold text-gray-900 text-sm">Running Playwright Tests</p>
+                  {evalStep === 2 && <p className="text-xs text-gray-500 mt-1">Checking assertions...</p>}
+                </div>
+              </div>
+
+              {/* Step 3: AI Review */}
+              <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 transition-colors ${evalStep > 3 ? 'bg-green-500 text-white' : evalStep === 3 ? 'bg-blue-500 text-white animate-pulse' : 'bg-gray-200 text-gray-400'}`}>
+                  {evalStep > 3 ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg> : evalStep === 3 ? <div className="w-2.5 h-2.5 bg-white rounded-full" /> : <div className="w-2.5 h-2.5 bg-gray-400 rounded-full" />}
+                </div>
+                <div className={`w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] bg-white p-3 rounded-lg border shadow-sm transition-all ${evalStep === 3 ? 'border-blue-100 bg-blue-50/30' : evalStep > 3 ? 'border-gray-100' : 'border-transparent opacity-40'}`}>
+                  <p className="font-semibold text-gray-900 text-sm">AI Semantic Review</p>
+                </div>
+              </div>
+
+              {/* Step 4: Finalizing Report */}
+              <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
+                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 transition-colors ${evalStep === 4 ? 'bg-blue-500 text-white animate-pulse' : 'bg-gray-200 text-gray-400'}`}>
+                  {evalStep === 4 ? <div className="w-2.5 h-2.5 bg-white rounded-full" /> : <div className="w-2.5 h-2.5 bg-gray-400 rounded-full" />}
+                </div>
+                <div className={`w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] bg-white p-3 rounded-lg border shadow-sm transition-all ${evalStep === 4 ? 'border-blue-100 bg-blue-50/30' : 'border-transparent opacity-40'}`}>
+                  <p className="font-semibold text-gray-900 text-sm">Finalizing Report</p>
+                </div>
+              </div>
+            </div>
+
           </div>
         </div>
       )}

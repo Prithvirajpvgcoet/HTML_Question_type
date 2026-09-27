@@ -206,20 +206,30 @@ async def _run_generation_job(
                     await db.commit()
 
             # ── LLM call (hard timeout 90 s) ──────────────────────────────
-            raw = await asyncio.wait_for(
-                generate_assertions_from_llm(
-                    title=q.title,
-                    description=q.description_html,
-                    html=q.reference_html or "",
-                    css=q.reference_css or "",
-                    js=q.reference_js or "",
-                    keep_assertions=keep_dicts or None,
-                    failed_context=failed_dicts or None,
-                    target_count=target_count,
-                    mode=mode,
-                ),
-                timeout=90.0,
-            )
+            if mode == "edge_cases":
+                raw = await asyncio.wait_for(
+                    generate_edge_cases_from_llm(
+                        title=q.title,
+                        description=q.description_html,
+                        existing_assertions=keep_dicts or [],
+                    ),
+                    timeout=90.0,
+                )
+            else:
+                raw = await asyncio.wait_for(
+                    generate_assertions_from_llm(
+                        title=q.title,
+                        description=q.description_html,
+                        html=q.reference_html or "",
+                        css=q.reference_css or "",
+                        js=q.reference_js or "",
+                        keep_assertions=keep_dicts or None,
+                        failed_context=failed_dicts or None,
+                        target_count=target_count,
+                        mode=mode,
+                    ),
+                    timeout=90.0,
+                )
 
             # ── Step 2: save & validate ───────────────────────────────────
             job.status = JobStatus.validating
@@ -710,25 +720,58 @@ async def delete_assertion(assertion_id: str, db: AsyncSession = Depends(get_db)
 # ── Misc ───────────────────────────────────────────────────────────────────
 
 @router.post("/{question_id}/generate-edge-cases")
-async def generate_edge_cases(question_id: str, db: AsyncSession = Depends(get_db)):
+async def generate_edge_cases(
+    question_id: str,
+    bg: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     result = await db.execute(select(Question).where(Question.id == question_id))
     q = result.scalar_one_or_none()
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
-    a_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
-    existing = [
-        {"check_type": a.check_type, "expected_result": a.expected_result}
-        for a in a_res.scalars().all()
-    ]
-    try:
-        suggestions = await generate_edge_cases_from_llm(
-            title=q.title,
-            description=q.description_html,
-            existing_assertions=existing,
+    if not q.reference_html:
+        raise HTTPException(
+            status_code=400,
+            detail="A reference HTML solution must be saved before generating edge cases.",
         )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM edge-case generation failed: {e}")
-    return {"suggestions": suggestions}
+
+    # Concurrency guard
+    active = await db.execute(
+        select(AssertionGenerationJob).where(
+            AssertionGenerationJob.question_id == question_id,
+            AssertionGenerationJob.status.in_([JobStatus.pending, JobStatus.analyzing, JobStatus.validating]),
+        )
+    )
+    if active.scalar_one_or_none():
+        raise HTTPException(status_code=422, detail="An assertion generation job is already running.")
+
+    # Create job
+    job = AssertionGenerationJob(
+        question_id=question_id,
+        mode="edge_cases",
+        target_count=2,  # The edge cases prompt asks for 2
+        status=JobStatus.pending,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    # Keep all existing assertions when doing edge cases
+    a_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
+    existing_ids = [a.id for a in a_res.scalars().all()]
+
+    bg.add_task(
+        _run_generation_job,
+        job_id=job.id,
+        question_id=question_id,
+        mode="edge_cases",
+        keep_ids=existing_ids,
+        failed_ids=[],
+        target_count=2,
+        repair_round=0,
+    )
+
+    return _build_job_response(job)
 
 
 @router.post("/{question_id}/code-solution/validate")

@@ -64,7 +64,47 @@ export function ReportPage() {
   const tcFailed = tcTotal - tcPassed;
   const tcNotEvaluatedCount = tcSkipped + tcNotRun;
   const tcNotEvaluatedRate = tcTotal > 0 ? Math.round((tcNotEvaluatedCount / tcTotal) * 100) : 0;
-  const isPassed = maxScore > 0 ? (score / maxScore) >= 0.7 : false;
+  
+  const scorePercent = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
+  const isPassed = scorePercent >= 70;
+
+  let gradeBand = "Insufficient";
+  let gradeColor = "text-red-700";
+  let gradeBg = "bg-[#FEF2F2]";
+  let gradeBorder = "border-[#FEE2E2]";
+  let gradeBar = "bg-red-500";
+  let gradeBarBg = "bg-red-200";
+  let gradeIconColor = "text-red-600";
+  let gradeIconBorder = "border-red-200";
+
+  if (scorePercent >= 90) {
+    gradeBand = "Excellent";
+    gradeColor = "text-emerald-700";
+    gradeBg = "bg-[#ECFDF5]";
+    gradeBorder = "border-[#D1FAE5]";
+    gradeBar = "bg-emerald-500";
+    gradeBarBg = "bg-emerald-200";
+    gradeIconColor = "text-emerald-600";
+    gradeIconBorder = "border-emerald-200";
+  } else if (scorePercent >= 70) {
+    gradeBand = "Good";
+    gradeColor = "text-blue-700";
+    gradeBg = "bg-[#F0F9FF]";
+    gradeBorder = "border-[#E0F2FE]";
+    gradeBar = "bg-blue-500";
+    gradeBarBg = "bg-blue-200";
+    gradeIconColor = "text-blue-600";
+    gradeIconBorder = "border-blue-200";
+  } else if (scorePercent >= 50) {
+    gradeBand = "Needs Improvement";
+    gradeColor = "text-orange-700";
+    gradeBg = "bg-[#FFF7ED]";
+    gradeBorder = "border-[#FFEDD5]";
+    gradeBar = "bg-orange-500";
+    gradeBarBg = "bg-orange-200";
+    gradeIconColor = "text-orange-600";
+    gradeIconBorder = "border-orange-200";
+  }
 
   const initials = report?.candidate_name ? report.candidate_name.split(' ').map((n: string) => n[0]).join('').substring(0,2).toUpperCase() : 'RK';
   const name = report?.candidate_name || "Rohit Kumar";
@@ -164,18 +204,19 @@ export function ReportPage() {
               </div>
             </div>
 
-            {/* Verification Score */}
-            <div className="bg-[#F0F9FF] border border-[#E0F2FE] rounded-xl p-4 flex gap-4 items-center flex-1 shadow-sm">
-              <div className="w-10 h-10 rounded-full bg-white border border-blue-200 flex items-center justify-center shrink-0">
-                <Sparkles className="w-5 h-5 text-blue-600" />
+            {/* Grade Band Score */}
+            <div className={`${gradeBg} border ${gradeBorder} rounded-xl p-4 flex gap-4 items-center flex-1 shadow-sm transition-colors`}>
+              <div className={`w-10 h-10 rounded-full bg-white border ${gradeIconBorder} flex items-center justify-center shrink-0`}>
+                <Sparkles className={`w-5 h-5 ${gradeIconColor}`} />
               </div>
               <div className="flex-1">
-                <div className="text-sm text-gray-600 font-medium mb-1">LLM Verification Score</div>
+                <div className="text-sm text-gray-600 font-medium mb-1">AI Grade Assessment</div>
                 <div className="flex items-end justify-between mb-2">
-                  <span className="text-2xl font-bold text-blue-700 leading-none">{score} / {maxScore}</span>
+                  <span className={`text-2xl font-bold ${gradeColor} leading-none`}>{gradeBand}</span>
+                  <span className={`text-sm font-semibold ${gradeColor}`}>{scorePercent}%</span>
                 </div>
-                <div className="w-full bg-blue-200 rounded-full h-2.5">
-                  <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${maxScore > 0 ? Math.round((score / maxScore) * 100) : 0}%` }}></div>
+                <div className={`w-full ${gradeBarBg} rounded-full h-2.5`}>
+                  <div className={`${gradeBar} h-2.5 rounded-full`} style={{ width: `${scorePercent}%` }}></div>
                 </div>
               </div>
             </div>
@@ -344,11 +385,11 @@ export function ReportPage() {
                   ))}
                 </div>
               </div>
-              <div className="mt-auto bg-[#F0F9FF] p-4 px-6 border-t border-[#E0F2FE] flex items-center justify-between">
-                <div className="flex items-center gap-2 text-blue-800 font-semibold">
-                  <Sparkles className="w-5 h-5" /> Overall LLM Score
+              <div className={`mt-auto ${gradeBg} p-4 px-6 border-t ${gradeBorder} flex items-center justify-between transition-colors`}>
+                <div className={`flex items-center gap-2 ${gradeColor} font-semibold`}>
+                  <Sparkles className="w-5 h-5" /> Overall AI Grade
                 </div>
-                <div className="text-xl font-bold text-blue-700">{score} / {maxScore}</div>
+                <div className={`text-xl font-bold ${gradeColor}`}>{gradeBand} <span className="text-sm opacity-70 ml-2 font-normal">({score} / {maxScore})</span></div>
               </div>
             </div>
 
