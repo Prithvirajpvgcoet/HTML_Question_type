@@ -132,7 +132,7 @@ async def process_evaluation_task(submission_id: str):
 
             tc_total_points = sum(a.points for a in assertions)
 
-            from services.review_service.feedback_generator import generate_eval_feedback
+            # 6. Run LLM Semantic Scoring (the remaining 50%)
             
             from models.submission import SubmissionLLMStatus
             
@@ -171,13 +171,18 @@ async def process_evaluation_task(submission_id: str):
                             "passed": r["passed"]
                         })
 
-                    feedback_text = await generate_eval_feedback(
-                        html=submission.submitted_html or "",
-                        css=submission.submitted_css or "",
-                        js=submission.submitted_js or "",
-                        eval_results=eval_feedback_list
-                    )
-                    submission.ai_feedback_text = feedback_text
+                    try:
+                        from services.review_service.feedback_generator import generate_eval_feedback
+                        feedback_text = await generate_eval_feedback(
+                            html=submission.submitted_html or "",
+                            css=submission.submitted_css or "",
+                            js=submission.submitted_js or "",
+                            eval_results=eval_feedback_list
+                        )
+                        submission.ai_feedback_text = feedback_text
+                    except Exception as e:
+                        logger.error(f"Feedback generation failed for submission {submission_id}: {e}")
+                        submission.ai_feedback_text = "Evaluation complete. Detailed feedback generation failed."
 
                     submission.ai_confidence = "high" if llm_score >= 35 else "medium" if llm_score >= 20 else "low"
 

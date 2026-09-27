@@ -23,7 +23,7 @@ async def generate_eval_feedback(html: str, css: str, js: str, eval_results: lis
         from ai.llm_client.client import call_llm_structured
         result = await call_llm_structured(
             system_prompt=PROMPT,
-            user_message=f"Candidate HTML:
+            user_message=f"""Candidate HTML:
 {html}
 
 CSS:
@@ -33,7 +33,7 @@ JS:
 {js}
 
 Results:
-{results_text}",
+{results_text}""",
             schema=FeedbackResponse,
             model=settings.llm_model_scoring,
             thinking_level="minimal"
