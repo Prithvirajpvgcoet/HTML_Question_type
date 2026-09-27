@@ -39,6 +39,7 @@ export function CandidateTestPage() {
 
   const [submitting, setSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [closeAttempted, setCloseAttempted] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [timeLeft, setTimeLeft] = useState(3600);
 
@@ -139,9 +140,21 @@ export function CandidateTestPage() {
           </div>
           <h1 className="text-2xl font-bold text-gray-900 mb-4">Thank You for Submitting!</h1>
           <p className="text-gray-500 text-sm mb-8">Your test has been successfully submitted and evaluated. The recruiter will review your results.</p>
-          <button onClick={() => window.close()} className="px-8 py-3 bg-[#FF6B35] text-white font-semibold rounded-lg hover:bg-orange-600 shadow-sm transition-colors">
-            Close Window
-          </button>
+          {!closeAttempted ? (
+            <button 
+              onClick={() => {
+                window.close();
+                setTimeout(() => setCloseAttempted(true), 300);
+              }} 
+              className="px-8 py-3 bg-[#FF6B35] text-white font-semibold rounded-lg hover:bg-orange-600 shadow-sm transition-colors"
+            >
+              Close Window
+            </button>
+          ) : (
+            <div className="p-4 bg-orange-50 rounded-lg border border-orange-100 text-orange-800 text-sm font-medium">
+              You can safely close this browser tab now.
+            </div>
+          )}
         </div>
       </div>
     );

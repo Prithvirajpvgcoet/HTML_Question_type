@@ -100,6 +100,7 @@ async def get_evaluation_report(submission_id: str, db: AsyncSession = Depends(g
     return {
         "id": submission.id,
         "candidate_name": submission.candidate_name,
+        "candidate_email": submission.candidate_email,
         "status": submission.status,
         "total_score": submission.total_score,
         "max_score": submission.max_score,

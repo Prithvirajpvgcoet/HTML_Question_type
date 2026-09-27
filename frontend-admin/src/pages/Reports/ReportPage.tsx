@@ -1,22 +1,38 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
 import { 
   ArrowLeft, Download, Trophy, Sparkles, CheckCircle2, 
-  Info, Check, ChevronRight, Clock, AlertCircle, Lightbulb, Settings, Eye, ClipboardList, XCircle
+  Info, Check, ChevronRight, Clock, AlertCircle, Lightbulb, Settings, Eye, ClipboardList, XCircle, Loader2
 } from "lucide-react";
+
+const IN_PROGRESS_STATUSES = ["pending", "queued", "evaluating"];
 
 export function ReportPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [report, setReport] = useState<any>(null);
   const [activeTab, setActiveTab] = useState('evaluation');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
+  const fetchReport = () => {
     if (!id) return;
     api.get(`/submissions/${id}/evaluation`)
-      .then(res => setReport(res.data))
+      .then(res => {
+        setReport(res.data);
+        // Stop polling once evaluation is no longer in-progress
+        if (!IN_PROGRESS_STATUSES.includes(res.data?.status)) {
+          if (pollRef.current) clearInterval(pollRef.current);
+        }
+      })
       .catch(() => console.error("Could not load report"));
+  };
+
+  useEffect(() => {
+    fetchReport();
+    // Start polling — will self-cancel once status leaves in-progress
+    pollRef.current = setInterval(fetchReport, 3000);
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [id]);
 
   const toggleReview = async () => {
@@ -52,8 +68,38 @@ export function ReportPage() {
 
   const initials = report?.candidate_name ? report.candidate_name.split(' ').map((n: string) => n[0]).join('').substring(0,2).toUpperCase() : 'RK';
   const name = report?.candidate_name || "Rohit Kumar";
+  const email = report?.candidate_email || "";
   const dateStr = report?.submitted_at ? new Date(report.submitted_at).toLocaleString() : 'N/A';
 
+  // Show loading spinner while report hasn't loaded yet
+  if (!report) {
+    return (
+      <div className="bg-[#F8FAFC] min-h-screen flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3 text-gray-500">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+          <p className="text-sm font-medium">Loading report…</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Show evaluation-in-progress screen while backend is still running
+  if (IN_PROGRESS_STATUSES.includes(report?.status)) {
+    return (
+      <div className="bg-[#F8FAFC] min-h-screen flex items-center justify-center">
+        <div className="bg-white rounded-2xl shadow-xl border border-gray-100 p-12 max-w-md w-full text-center">
+          <div className="w-16 h-16 bg-blue-50 rounded-full flex items-center justify-center mx-auto mb-5">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Evaluation in Progress</h2>
+          <p className="text-sm text-gray-500 leading-relaxed mb-4">
+            AI is running Playwright test cases and scoring the submission. This usually takes 20–60 seconds.
+          </p>
+          <div className="text-xs text-gray-400">Checking for updates every 3 seconds…</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-[#F8FAFC] min-h-screen text-gray-800 font-sans pb-12">
@@ -93,7 +139,7 @@ export function ReportPage() {
             <div>
               <h1 className="text-xl font-bold text-gray-900">{name}</h1>
               <div className="text-sm text-gray-500 leading-tight mt-0.5">
-                {name.toLowerCase().replace(' ', '.')}@email.com<br/>
+                {email && <>{email}<br/></>}
                 Software Development Assessment<br/>
                 Attempted on {dateStr}
               </div>
@@ -129,20 +175,22 @@ export function ReportPage() {
                   <span className="text-2xl font-bold text-blue-700 leading-none">{score} / {maxScore}</span>
                 </div>
                 <div className="w-full bg-blue-200 rounded-full h-2.5">
-                  <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${score}%` }}></div>
+                  <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${maxScore > 0 ? Math.round((score / maxScore) * 100) : 0}%` }}></div>
                 </div>
               </div>
             </div>
 
             {/* Verdict */}
-            <div className="bg-[#F0FDF4] border border-[#DCFCE7] rounded-xl p-4 flex gap-4 items-center flex-1 shadow-sm">
-              <div className="w-10 h-10 rounded-full bg-green-500 text-white flex items-center justify-center shrink-0">
-                <Check className="w-6 h-6" />
+            <div className={`border rounded-xl p-4 flex gap-4 items-center flex-1 shadow-sm ${isPassed ? 'bg-[#F0FDF4] border-[#DCFCE7]' : 'bg-[#FEF2F2] border-[#FEE2E2]'}`}>
+              <div className={`w-10 h-10 rounded-full text-white flex items-center justify-center shrink-0 ${isPassed ? 'bg-green-500' : 'bg-red-500'}`}>
+                {isPassed ? <Check className="w-6 h-6" /> : <XCircle className="w-6 h-6" />}
               </div>
               <div>
                 <div className="text-sm text-gray-600 font-medium mb-0.5">Verdict</div>
-                <div className="text-xl font-bold text-green-700 mb-1 leading-none">{isPassed ? 'Passed' : 'Failed'}</div>
-                <p className="text-[10px] text-green-800 leading-tight opacity-80">Solution is correct for most cases based on AI evaluation.</p>
+                <div className={`text-xl font-bold mb-1 leading-none ${isPassed ? 'text-green-700' : 'text-red-700'}`}>{isPassed ? 'Passed' : 'Failed'}</div>
+                <p className={`text-[10px] leading-tight opacity-80 ${isPassed ? 'text-green-800' : 'text-red-800'}`}>
+                  {isPassed ? 'Solution is correct for most cases based on AI evaluation.' : 'Solution failed to meet the required criteria.'}
+                </p>
               </div>
             </div>
           </div>

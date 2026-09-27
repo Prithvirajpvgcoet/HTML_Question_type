@@ -1,4 +1,4 @@
-﻿import uuid
+import uuid
 import enum
 from datetime import datetime
 from sqlalchemy import String, DateTime, Text, ForeignKey, Integer, Boolean
@@ -45,6 +45,8 @@ class Submission(Base):
     ai_feedback_text: Mapped[str] = mapped_column(Text, nullable=True)
     ai_feedback_breakdown: Mapped[str] = mapped_column(Text, nullable=True)
     ai_confidence: Mapped[str] = mapped_column(String(50), nullable=True)
+
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default='false')
 
     submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)

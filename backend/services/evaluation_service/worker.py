@@ -94,10 +94,11 @@ async def process_evaluation_task(submission_id: str):
             batch_results = await verify_testcases_batch_with_llm(submission, question, failed_cases)
 
             for r in results:
+                a_model = assertion_map.get(r["assertion_id"])
                 eval_record = EvaluationResult(
                     submission_id=submission.id,
                     assertion_id=r["assertion_id"],
-                    assertion_set_version=submission.assertion_set_version or 1,
+                    assertion_set_version=a_model.assertion_set_version if a_model else 1,
                     tc_status=TCStatus.passed if r["passed"] else TCStatus.failed,
                     actual_result=r["actual_value"],
                     points_awarded=r["points_awarded"]
@@ -131,33 +132,53 @@ async def process_evaluation_task(submission_id: str):
 
             tc_total_points = sum(a.points for a in assertions)
 
-            from services.scoring_service.llm_scorer import generate_feedback
+            from services.review_service.feedback_generator import generate_eval_feedback
             
             from models.submission import SubmissionLLMStatus
             
             # 6. Run LLM Semantic Scoring (the remaining 50%)
+            # Gate: only skip if EVERY single Playwright test failed (nothing to score).
+            # Partial passes still deserve AI feedback and a real LLM score.
             llm_score = 0
             if question:
-                if tc_passed_count < len(assertions):
+                if tc_passed_count == 0 and len(assertions) > 0:
+                    # All tests failed — no point running LLM on a blank slate
                     submission.llm_status = SubmissionLLMStatus.skipped_due_to_failure
                     submission.ai_feedback_breakdown = "{}"
-                    submission.ai_feedback_text = "Skipped AI Semantic Evaluation due to failing functional checks."
-                    submission.ai_confidence = "high"
+                    submission.ai_feedback_text = (
+                        "AI Semantic Scoring was skipped because all automated test cases failed. "
+                        "Please review the test case results above."
+                    )
+                    submission.ai_confidence = "low"
                 else:
                     submission.llm_status = SubmissionLLMStatus.evaluated
                     llm_result = await score_with_llm(submission, question)
                     # Clamp score between 0 and 50
                     llm_score = min(max(int(llm_result.get("score", 0)), 0), 50)
-                    
+
                     # Merge strengths and improvements into the breakdown JSON for the frontend
                     breakdown_data = llm_result.get("breakdown", {})
                     breakdown_data["strengths"] = llm_result.get("strengths", [])
                     breakdown_data["improvements"] = llm_result.get("improvements", [])
                     submission.ai_feedback_breakdown = json.dumps(breakdown_data)
-                    
-                    feedback_text = await generate_feedback(llm_result, tc_passed_count, len(assertions))
+
+                    eval_feedback_list = []
+                    for r in results:
+                        a_model = assertion_map.get(r["assertion_id"])
+                        eval_feedback_list.append({
+                            "expected": a_model.expected_result if a_model else "unknown",
+                            "actual": r["actual_value"],
+                            "passed": r["passed"]
+                        })
+
+                    feedback_text = await generate_eval_feedback(
+                        html=submission.submitted_html or "",
+                        css=submission.submitted_css or "",
+                        js=submission.submitted_js or "",
+                        eval_results=eval_feedback_list
+                    )
                     submission.ai_feedback_text = feedback_text
-                    
+
                     submission.ai_confidence = "high" if llm_score >= 35 else "medium" if llm_score >= 20 else "low"
 
             submission.tc_passed = tc_passed_count

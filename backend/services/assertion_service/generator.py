@@ -66,7 +66,7 @@ TESTING BEHAVIOR RULES:
      {"trigger":"input","trigger_selector":"#password","group_id":"g1","sequence_order":2},
      {"trigger":"page_load","check_selector":"#loginBtn","expected_result":"disabled=false","group_id":"g1","sequence_order":3}]
 - Delayed/timed changes MUST be a separate assertion with wait_ms matching the delay.
-- Generate EXACTLY 6 assertions. If there are more than 6 testable requirements, combine related checks into a single assertion (e.g., verifying multiple style changes after a click) or prioritize the most critical functional behaviors to stay at exactly 6.
+- Do not combine unrelated checks into a single assertion (e.g., verifying multiple style changes after a click). Keep each assertion focused on one check_type.
 - Mark exactly the first half (rounded down) of assertions, in generation order, as "is_sample": true (visible to candidate); remainder false.
 - Order assertions from page load to final state.
 
@@ -92,22 +92,75 @@ Respond ONLY with this JSON object:
 }
 """
 
-async def generate_assertions_from_llm(title: str, description: str, html: str, css: str, js: str):
+async def generate_assertions_from_llm(
+    title: str,
+    description: str,
+    html: str,
+    css: str,
+    js: str,
+    keep_assertions: list[dict] | None = None,
+    failed_context: list[dict] | None = None,
+    target_count: int | None = None,
+    mode: str = "full",
+):
     html = html or ""
     css = css or ""
     js = js or ""
     # Pre-parse valid IDs and Classes from the reference HTML to use as a guardrail
     valid_ids = set(re.findall(r'id=["\']([^"\']+)["\']', html))
     valid_classes = set(c for match in re.findall(r'class=["\']([^"\']+)["\']', html) for c in match.split())
-    
+
     # Inject explicit allowed lists into the prompt
     allowed_ids_str = ", ".join([f"#{i}" for i in valid_ids]) if valid_ids else "None"
     allowed_classes_str = ", ".join([f".{c}" for c in valid_classes]) if valid_classes else "None"
-    
+
     user_content = f"Question Title: {title}\nQuestion Description: {description}\n\nReference HTML:\n{html}\n\nReference CSS:\n{css}\n\nReference JS:\n{js}\n\n"
     user_content += "CRITICAL: You may ONLY use the following specific selectors found in the reference code:\n"
     user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
-    user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
+
+    # ── Context block for repair / diversify modes ────────────────────────────
+    context_block = ""
+    if keep_assertions:
+        formatted_keep = "\n".join(
+            f"- {a['trigger']} {a.get('trigger_selector', '')} -> {a['check_type']} "
+            f"{a.get('check_selector', '')} expects {a.get('expected_result', '')}"
+            for a in keep_assertions
+        )
+        context_block += (
+            f"\nThe following {len(keep_assertions)} assertions ALREADY PASS validation "
+            f"against the reference solution and are FINAL — do NOT repeat, rephrase, or "
+            f"overlap their selectors, triggers, or check targets:\n{formatted_keep}\n"
+        )
+
+    if mode == "diversify" and target_count is not None:
+        need = target_count - len(keep_assertions or [])
+        context_block += (
+            f"\nGenerate exactly {need} NEW assertions covering DIFFERENT testable requirements "
+            f"from the description that are NOT already covered by the assertions listed above.\n"
+        )
+    elif mode == "repair" and failed_context:
+        formatted_fail = "\n".join(
+            f"- {a['trigger']} {a.get('trigger_selector', '')} -> {a['check_type']} "
+            f"{a.get('check_selector', '')} expected {a.get('expected_result', '')}, "
+            f"FAILED because: {a.get('error', 'unknown error')}"
+            for a in failed_context
+        )
+        context_block += (
+            f"\nThe following assertions FAILED against the reference solution. "
+            f"Fix them to correctly test the SAME requirement — "
+            f"do NOT change or duplicate what already passes above:\n{formatted_fail}\n"
+        )
+    elif mode == "full":
+        count = target_count or 6
+        context_block += (
+            f"\nCRITICAL: You MUST generate EXACTLY {count} assertions in total. "
+            f"Review your checklist and prioritize the most important behaviors to hit exactly {count}. "
+            f"Do not return fewer than {count} assertions under any circumstance.\n"
+        )
+
+    if context_block:
+        user_content += context_block
+
     try:
         # Schema-enforced LLM call with built-in retries and rate limiting
         result = await call_llm_structured(
@@ -115,52 +168,53 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
             user_message=user_content,
             schema=AssertionList,
             model=settings.llm_model_generation,
-            thinking_level="high"
+            thinking_level="low"  # enough for precondition-chaining logic, well under 90s
         )
-        
+
         # Result is already a parsed dictionary thanks to call_llm_structured
         assertions = result.get("assertions", [])
-        
+
         # Guardrail check
         is_valid = True
         for a in assertions:
             combined_selectors = (a.get('trigger_selector') or '') + ' ' + (a.get('check_selector') or '')
-            
+
             # Check IDs
             ids_in_selector = re.findall(r'#([a-zA-Z0-9_-]+)', combined_selectors)
             for id_sel in ids_in_selector:
                 if id_sel not in valid_ids:
                     print(f"Guardrail failed: ID '{id_sel}' not found in reference HTML.")
                     is_valid = False
-                    
+
             # Check Classes
             classes_in_selector = re.findall(r'\.([a-zA-Z0-9_-]+)', combined_selectors)
             for cls_sel in classes_in_selector:
                 if cls_sel not in valid_classes:
                     print(f"Guardrail failed: Class '{cls_sel}' not found in reference HTML.")
                     is_valid = False
-                    
+
         if not is_valid:
-            print("Warning: Guardrail warnings detected, but returning assertions anyway (Gemini schema usually mitigates worst offenses).")
-            
+            print("Warning: Guardrail warnings detected, but returning assertions anyway.")
+
     except Exception as e:
         print(f"generate_assertions_from_llm failed: {e}")
         raise e
 
-    # Enforce max 6 assertions
-    assertions = assertions[:6]
+    # Cap at max 10 (full mode stays ≤6 via prompt; repair/diversify may fill quota up to 10)
+    MAX_ASSERTIONS = 10
+    assertions = assertions[:MAX_ASSERTIONS]
 
-    # Re-distribute points dynamically based on difficulty to enforce consistency
+    # Re-distribute points dynamically based on difficulty
     def get_weight(trigger, check_type):
         if trigger == "page_load" and check_type == "dom_presence":
-            return 1 # Easy
+            return 1  # Easy
         if trigger in ("click", "input", "change", "hover") and check_type == "computed_style":
-            return 3 # Hard
-        return 2 # Medium
+            return 3  # Hard
+        return 2  # Medium
 
     weights = [get_weight(a.get("trigger", "page_load"), a.get("check_type", "dom_presence")) for a in assertions]
     total_weight = sum(weights)
-    
+
     if total_weight > 0 and len(assertions) > 0:
         running = 0
         for i, a in enumerate(assertions):
@@ -176,7 +230,7 @@ async def generate_assertions_from_llm(title: str, description: str, html: str, 
 
 async def generate_edge_cases_from_llm(title: str, description: str, existing_assertions: list) -> list:
     edge_prompt = f"""
-    Based on the {len(existing_assertions)} assertions already created for '{title}', generate 2 additional edge case assertions 
+    Based on the {len(existing_assertions)} assertions already created for '{title}', generate 2 additional edge case assertions
     that would catch common candidate mistakes (e.g. empty/null values, wrong types, extreme values).
     Description: {description}
     """
@@ -186,13 +240,11 @@ async def generate_edge_cases_from_llm(title: str, description: str, existing_as
             user_message=edge_prompt,
             schema=AssertionList,
             model=settings.llm_model_generation,
-            thinking_level="high"
+            thinking_level="minimal"  # simple extraction — no reasoning needed
         )
         return result.get("assertions", [])[:2]
     except Exception as e:
         print(f"Edge Case Generator Error: {e}")
         return []
-    except Exception as e:
-        print(f"Edge Case Generator Error: {e}")
-        return []
+
 

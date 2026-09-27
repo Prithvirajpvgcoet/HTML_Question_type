@@ -1,20 +1,265 @@
-import re
 import json
+import asyncio
 import logging
-from fastapi import APIRouter, Depends, HTTPException
+from datetime import datetime
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from sqlalchemy import delete as sa_delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from pydantic import BaseModel
-from database import get_db
-from models import Question, Assertion
+
+from database import get_db, AsyncSessionLocal
+from models import Question, Assertion, AssertionGenerationJob
+from models.assertion_job import JobStatus
 from models.question import ValidationStatus
 from services.assertion_service.generator import generate_assertions_from_llm, generate_edge_cases_from_llm
 from services.evaluation_service.runner import evaluate_submission
 
 logger = logging.getLogger(__name__)
 
-
 router = APIRouter()
+
+MAX_REPAIR_ROUNDS = 2  # after this many auto-repair attempts, stop and force manual edit
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _serialize_assertion(a: Assertion) -> dict:
+    return {
+        "id": a.id,
+        "trigger": a.trigger.value if hasattr(a.trigger, "value") else a.trigger,
+        "trigger_selector": a.trigger_selector,
+        "check_selector": a.check_selector,
+        "check_type": a.check_type.value if hasattr(a.check_type, "value") else a.check_type,
+        "expected_result": a.expected_result,
+        "points": a.points,
+        "is_sample": a.is_sample,
+        "execution_mode": a.execution_mode.value if hasattr(a.execution_mode, "value") else a.execution_mode,
+        "group_id": a.group_id,
+        "sequence_order": a.sequence_order,
+        "last_validation_status": getattr(a, "last_validation_status", "not_run"),
+        "last_validation_error": getattr(a, "last_validation_error", None),
+        "assertion_set_version": getattr(a, "assertion_set_version", 1),
+    }
+
+
+async def _validate_against_reference(
+    q: Question,
+    saved_assertions: list,
+    db: AsyncSession,
+) -> dict:
+    """
+    Runs saved_assertions against q's reference solution via Playwright.
+    Writes last_validation_status / last_validation_error on every row.
+    Returns {"passed": [...], "failed": [...]} — never raises.
+    """
+    results = await evaluate_submission(
+        html=q.reference_html or "",
+        css=q.reference_css or "",
+        js=q.reference_js or "",
+        assertions=saved_assertions,
+    )
+    results_by_id = {r["assertion_id"]: r for r in results}
+
+    passed, failed = [], []
+    for a in saved_assertions:
+        r = results_by_id.get(a.id)
+        if r and r["passed"]:
+            a.last_validation_status = "passed"
+            a.last_validation_error = None
+            passed.append(a)
+        else:
+            a.last_validation_status = "failed"
+            a.last_validation_error = (r or {}).get("error", "")
+            failed.append(a)
+
+    q.validation_status = ValidationStatus.passed if not failed else ValidationStatus.failed
+    q.last_validation_results = json.dumps(results)
+    await db.commit()
+    for a in saved_assertions:
+        await db.refresh(a)
+
+    logger.info(
+        "reference_validation_done",
+        extra={"question_id": q.id, "passed": len(passed), "failed": len(failed)},
+    )
+    return {"passed": passed, "failed": failed}
+
+
+async def _save_new_assertions(
+    q: Question,
+    raw_list: list[dict],
+    order_offset: int,
+    db: AsyncSession,
+) -> list[Assertion]:
+    """Persist a list of raw LLM-generated dicts as Assertion rows."""
+    rows = []
+    for idx, raw in enumerate(raw_list):
+        new_a = Assertion(
+            question_id=q.id,
+            order=order_offset + idx,
+            trigger=raw.get("trigger", "page_load"),
+            trigger_selector=raw.get("trigger_selector", ""),
+            check_selector=raw.get("check_selector", ""),
+            check_type=raw.get("check_type", "dom_presence"),
+            expected_result=raw.get("expected_result", ""),
+            points=raw.get("points", 10),
+            wait_ms=raw.get("wait_ms", 300),
+            is_sample=raw.get("is_sample", False),
+            execution_mode=raw.get("execution_mode", "isolated"),
+            group_id=raw.get("group_id"),
+            sequence_order=raw.get("sequence_order"),
+            depends_on_state=raw.get("depends_on_state"),
+            last_validation_status="not_run",
+        )
+        db.add(new_a)
+        rows.append(new_a)
+    await db.commit()
+    for r in rows:
+        await db.refresh(r)
+    return rows
+
+
+def _build_job_response(job: AssertionGenerationJob, assertions: list[dict] | None = None) -> dict:
+    elapsed = (datetime.utcnow() - job.started_at).total_seconds()
+    resp: dict = {
+        "job_id": job.id,
+        "status": job.status.value if hasattr(job.status, "value") else job.status,
+        "mode": job.mode,
+        "elapsed_seconds": round(elapsed, 1),
+        "error_message": job.error_message,
+        "repair_round": job.repair_round,
+    }
+    if assertions is not None:
+        resp["assertions"] = assertions
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Background job runner
+# ---------------------------------------------------------------------------
+
+async def _run_generation_job(
+    job_id: str,
+    question_id: str,
+    mode: str,
+    keep_ids: list[str] | None,
+    failed_ids: list[str] | None,
+    target_count: int,
+    repair_round: int,
+):
+    """
+    Heavy-lifting background task.  Uses its own DB session (BackgroundTasks
+    in FastAPI run after the request session closes).
+    """
+    async with AsyncSessionLocal() as db:
+        job = await db.get(AssertionGenerationJob, job_id)
+        q_res = await db.execute(select(Question).where(Question.id == question_id))
+        q = q_res.scalar_one_or_none()
+        if not q or not job:
+            return
+
+        try:
+            # ── Step 1: analyzing ──────────────────────────────────────────
+            job.status = JobStatus.analyzing
+            await db.commit()
+
+            # Load keep assertions if provided
+            keep_assertions_db: list[Assertion] = []
+            if keep_ids:
+                res = await db.execute(select(Assertion).where(Assertion.id.in_(keep_ids)))
+                keep_assertions_db = list(res.scalars().all())
+
+            failed_assertions_db: list[Assertion] = []
+            if failed_ids:
+                res = await db.execute(select(Assertion).where(Assertion.id.in_(failed_ids)))
+                failed_assertions_db = list(res.scalars().all())
+
+            keep_dicts = [_serialize_assertion(a) for a in keep_assertions_db]
+            failed_dicts = [
+                {**_serialize_assertion(a), "error": a.last_validation_error or ""}
+                for a in failed_assertions_db
+            ]
+
+            if mode == "full":
+                # Delete all existing assertions first
+                await db.execute(
+                    text(
+                        "DELETE FROM evaluation_results WHERE assertion_id "
+                        "IN (SELECT id FROM assertions WHERE question_id=:qid)"
+                    ),
+                    {"qid": question_id},
+                )
+                await db.execute(sa_delete(Assertion).where(Assertion.question_id == question_id))
+                q.validation_status = ValidationStatus.not_run
+                q.is_published = False
+                await db.commit()
+
+            elif mode == "repair":
+                # Delete only the failed rows before generating replacements
+                if failed_ids:
+                    await db.execute(sa_delete(Assertion).where(Assertion.id.in_(failed_ids)))
+                    await db.commit()
+
+            # ── LLM call (hard timeout 90 s) ──────────────────────────────
+            raw = await asyncio.wait_for(
+                generate_assertions_from_llm(
+                    title=q.title,
+                    description=q.description_html,
+                    html=q.reference_html or "",
+                    css=q.reference_css or "",
+                    js=q.reference_js or "",
+                    keep_assertions=keep_dicts or None,
+                    failed_context=failed_dicts or None,
+                    target_count=target_count,
+                    mode=mode,
+                ),
+                timeout=90.0,
+            )
+
+            # ── Step 2: save & validate ───────────────────────────────────
+            job.status = JobStatus.validating
+            await db.commit()
+
+            order_offset = len(keep_assertions_db)
+            new_rows = await _save_new_assertions(q, raw, order_offset, db)
+            all_assertions = keep_assertions_db + new_rows
+
+            split = await _validate_against_reference(q, all_assertions, db)
+
+            job.status = JobStatus.completed
+            job.finished_at = datetime.utcnow()
+            # Store the split counts for the poll endpoint
+            job.error_message = json.dumps({
+                "passed_count": len(split["passed"]),
+                "failed_count": len(split["failed"]),
+            })
+            await db.commit()
+
+        except asyncio.TimeoutError:
+            job.status = JobStatus.failed
+            job.error_message = "LLM call timed out after 90 s. Try again."
+            job.finished_at = datetime.utcnow()
+            q.validation_status = ValidationStatus.failed
+            await db.commit()
+            logger.error("assertion_job_timeout", extra={"job_id": job_id})
+
+        except Exception as exc:
+            job.status = JobStatus.failed
+            job.error_message = str(exc)[:500]
+            job.finished_at = datetime.utcnow()
+            q.validation_status = ValidationStatus.failed
+            await db.commit()
+            logger.error("assertion_job_failed", extra={"job_id": job_id, "error": str(exc)}, exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# Pydantic schemas
+# ---------------------------------------------------------------------------
 
 class CreateQuestionReq(BaseModel):
     title: str
@@ -22,246 +267,22 @@ class CreateQuestionReq(BaseModel):
     question_type: str = "HTML/CSS/JS"
     is_published: bool = False
 
+
 class UpdateCodeSolutionReq(BaseModel):
     reference_html: str = ""
     reference_css: str = ""
     reference_js: str = ""
 
-@router.post("")
-async def create_question(req: CreateQuestionReq, db: AsyncSession = Depends(get_db)):
-    new_q = Question(
-        title=req.title,
-        description_html=req.description_html,
-        question_type=req.question_type
-    )
-    db.add(new_q)
-    await db.commit()
-    await db.refresh(new_q)
-    return new_q
 
-@router.get("/{question_id}")
-async def get_question(question_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Question).where(Question.id == question_id))
-    q = result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(status_code=404, detail="Question not found")
-    return q
-
-@router.put("/{question_id}/code-solution")
-async def update_code_solution(
-    question_id: str, 
-    req: UpdateCodeSolutionReq, 
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Question).where(Question.id == question_id))
-    q = result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(status_code=404, detail="Question not found")
-    
-    q.reference_html = req.reference_html
-    q.reference_css = req.reference_css
-    q.reference_js = req.reference_js
-    await db.commit()
-    return {"status": "ok"}
-
-async def _validate_against_reference(
-    q: Question,
-    saved_assertions: list,
-    db: AsyncSession
-) -> None:
-    """
-    Runs saved_assertions against q's reference solution via the Playwright evaluator.
-    
-    If all assertions pass  → marks q.validation_status = passed and commits.
-    If any assertion fails  → raises HTTPException 400 with structured failure details.
-    
-    This is the ground-truth gate: a correct reference solution must always pass
-    its own generated assertions. Any failure here means the assertions are wrong,
-    not the reference code.
-    """
-    results = await evaluate_submission(
-        html=q.reference_html or "",
-        css=q.reference_css or "",
-        js=q.reference_js or "",
-        assertions=saved_assertions
-    )
-
-    failed = [r for r in results if not r["passed"]]
-
-    if not failed:
-        # All assertions pass — mark the question as validated
-        q.validation_status = ValidationStatus.passed
-        q.last_validation_results = json.dumps(results)
-        await db.commit()
-        logger.info("reference_validation_passed", extra={"question_id": q.id})
-        return
-
-    # Build structured failure details with actionable hints
-    failure_details = []
-    for r in failed:
-        failure_details.append({
-            "assertion_id": r["assertion_id"],
-            "error": r.get("error", ""),
-            "hint": (
-                "If the button/element is still in a wrong state, check that ALL "
-                "input fields the reference JS reads in its enabling condition are "
-                "included as setup steps (trigger: input/change) in this group, "
-                "in sequence, before this assertion."
-            )
-        })
-
-    logger.warning(
-        "reference_validation_failed",
-        extra={"question_id": q.id, "failed_count": len(failed)}
-    )
-
-    raise HTTPException(
-        status_code=400,
-        detail={
-            "type": "reference_solution_mismatch",
-            "message": (
-                f"{len(failed)} of {len(results)} assertions fail against your own "
-                "reference solution. This means the assertions are incomplete or wrong "
-                "— not the reference code. Regenerate assertions to fix."
-            ),
-            "failures": failure_details,
-            "total_failed": len(failed),
-            "total_assertions": len(results)
-        }
-    )
+class CompleteAssertionsReq(BaseModel):
+    keep_assertion_ids: list[str]
+    target_count: int = 6
 
 
-# BUG-3: Generate edge-case suggestions without saving them
-@router.post("/{question_id}/generate-edge-cases")
-async def generate_edge_cases(question_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Question).where(Question.id == question_id))
-    q = result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(status_code=404, detail="Question not found")
-
-    # Fetch existing assertions to pass as context
-    a_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
-    existing = [
-        {"check_type": a.check_type, "expected_result": a.expected_result}
-        for a in a_res.scalars().all()
-    ]
-
-    try:
-        suggestions = await generate_edge_cases_from_llm(
-            title=q.title,
-            description=q.description_html,
-            existing_assertions=existing
-        )
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"LLM edge-case generation failed: {e}")
-
-    # Return suggestions only — caller decides whether to save
-    return {"suggestions": suggestions}
-
-
-@router.post("/{question_id}/generate-assertions")
-async def generate_assertions(question_id: str, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import delete
-    # 1. Get the question and reference solution
-    result = await db.execute(select(Question).where(Question.id == question_id))
-    q = result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(status_code=404, detail="Question not found")
-    if not q.reference_html:
-        raise HTTPException(status_code=400, detail="A reference HTML solution must be saved before generating assertions.")
-        
-    # 2. Call LLM
-    try:
-        raw_assertions = await generate_assertions_from_llm(
-            title=q.title,
-            description=q.description_html,
-            html=q.reference_html,
-            css=q.reference_css,
-            js=q.reference_js
-        )
-    except Exception as e:
-        print(f"Failed to generate assertions (Rate limit or LLM error): {e}")
-        q.validation_status = "failed"
-        await db.commit()
-        raise HTTPException(status_code=500, detail="Failed to generate assertions from LLM.")
-    
-    # 3. Validate generated assertions
-    issues = []
-    if len(raw_assertions) < 5:
-        issues.append({"type": "count", "message": f"Only {len(raw_assertions)} assertions generated; need >= 5."})
-    
-    if issues:
-        raise HTTPException(status_code=400, detail={"message": "Generated assertions failed validation.", "issues": issues})
-        
-    # 4. Delete existing assertions and their evaluation results (to avoid FK violation)
-    from sqlalchemy import text
-    await db.execute(
-        text("DELETE FROM evaluation_results WHERE assertion_id IN (SELECT id FROM assertions WHERE question_id=:qid)"),
-        {"qid": question_id}
-    )
-    await db.execute(delete(Assertion).where(Assertion.question_id == question_id))
-    
-    # Also reset validation_status on the question
-    q.validation_status = ValidationStatus.not_run
-    q.is_published = False
-    
-    await db.commit()
-
-    # 4. Save them to DB
-    saved_assertions = []
-    for i, a_data in enumerate(raw_assertions):
-        new_assert = Assertion(
-            question_id=q.id,
-            order=i,
-            trigger=a_data.get("trigger", "page_load"),
-            trigger_selector=a_data.get("trigger_selector", ""), 
-            check_selector=a_data.get("check_selector", ""),
-            check_type=a_data.get("check_type", "dom_presence"),
-            expected_result=a_data.get("expected_result", ""),
-            points=a_data.get("points", 10),
-            wait_ms=a_data.get("wait_ms", 300),
-            is_sample=a_data.get("is_sample", False),
-            execution_mode=a_data.get("execution_mode", "isolated"),
-            group_id=a_data.get("group_id"),
-            sequence_order=a_data.get("sequence_order"),
-            depends_on_state=a_data.get("depends_on_state")
-        )
-        db.add(new_assert)
-        saved_assertions.append(new_assert)
-        
-    await db.commit()
-    for obj in saved_assertions:
-        await db.refresh(obj)
-
-    # 5. Gate: run assertions against reference solution.
-    #    A correct reference must pass its own test cases.
-    #    If it fails, the assertions are wrong — roll back and report.
-    try:
-        await _validate_against_reference(q, saved_assertions, db)
-    except HTTPException as validation_error:
-        # Rollback: remove the broken assertion set so nothing bad lands in DB
-        from sqlalchemy import delete as sa_delete
-        await db.execute(sa_delete(Assertion).where(Assertion.question_id == question_id))
-        q.validation_status = ValidationStatus.failed
-        q.is_published = False
-        await db.commit()
-        raise validation_error
-
-    return {
-        "message": "Generated successfully", 
-        "assertions": [
-            {
-                "id": a.id, "trigger": a.trigger, "trigger_selector": a.trigger_selector, "check_selector": a.check_selector,
-                "check_type": a.check_type, "expected_result": a.expected_result, "points": a.points
-            }
-            for a in saved_assertions
-        ]
-    }
-
-@router.get("/{question_id}/assertions")
-async def get_assertions(question_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Assertion).where(Assertion.question_id == question_id).order_by(Assertion.order))
-    return result.scalars().all()
+class RepairAssertionsReq(BaseModel):
+    failed_assertion_ids: list[str]
+    keep_assertion_ids: list[str]
+    assertion_set_version: int  # optimistic-concurrency guard
 
 
 class CreateAssertionReq(BaseModel):
@@ -273,94 +294,441 @@ class CreateAssertionReq(BaseModel):
     points: int = 10
     is_sample: bool = False
 
-@router.post("/{question_id}/assertions")
-async def create_assertion(question_id: str, req: CreateAssertionReq, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
-    existing = result.scalars().all()
-    order = len(existing)
-
-    new_assert = Assertion(
-        question_id=question_id,
-        order=order,
-        trigger=req.trigger,
-        trigger_selector=req.trigger_selector, check_selector=req.check_selector,
-        check_type=req.check_type,
-        expected_result=req.expected_result,
-        points=req.points,
-        is_sample=req.is_sample,
-        source="author_added"
-    )
-    db.add(new_assert)
-    await db.commit()
-    await db.refresh(new_assert)
-    return new_assert
-
 
 class UpdateAssertionReq(BaseModel):
-    trigger: str | None = None
-    trigger_selector: str | None = None
-    check_selector: str | None = None
-    check_type: str | None = None
-    expected_result: str | None = None
-    points: int | None = None
-    is_sample: bool | None = None
+    trigger: Optional[str] = None
+    trigger_selector: Optional[str] = None
+    check_selector: Optional[str] = None
+    check_type: Optional[str] = None
+    expected_result: Optional[str] = None
+    points: Optional[int] = None
+    is_sample: Optional[bool] = None
 
-@router.put("/assertions/{assertion_id}")
-async def update_assertion(assertion_id: str, req: UpdateAssertionReq, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Assertion).where(Assertion.id == assertion_id))
-    assertion = result.scalar_one_or_none()
-    if not assertion:
-        raise HTTPException(status_code=404, detail="Assertion not found")
-    if req.trigger is not None:
-        assertion.trigger = req.trigger
-    if req.trigger_selector is not None:
-        assertion.trigger_selector = req.trigger_selector
-    if req.check_selector is not None:
-        assertion.check_selector = req.check_selector
-    if req.check_type is not None:
-        assertion.check_type = req.check_type
-    if req.expected_result is not None:
-        assertion.expected_result = req.expected_result
-    if req.points is not None:
-        assertion.points = req.points
-    if req.is_sample is not None:
-        assertion.is_sample = req.is_sample
-    await db.commit()
-    await db.refresh(assertion)
-    return assertion
 
-@router.delete("/assertions/{assertion_id}", status_code=204)
-async def delete_assertion(assertion_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Assertion).where(Assertion.id == assertion_id))
-    assertion = result.scalar_one_or_none()
-    if not assertion:
-        raise HTTPException(status_code=404, detail="Assertion not found")
-    
-    from sqlalchemy import text
-    await db.execute(
-        text("DELETE FROM evaluation_results WHERE assertion_id=:aid"),
-        {"aid": assertion_id}
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+@router.post("")
+async def create_question(req: CreateQuestionReq, db: AsyncSession = Depends(get_db)):
+    new_q = Question(
+        title=req.title,
+        description_html=req.description_html,
+        question_type=req.question_type,
     )
-    
-    # Also invalidate the question since assertions changed
-    q_res = await db.execute(select(Question).where(Question.id == assertion.question_id))
-    q = q_res.scalar_one_or_none()
-    if q:
-        q.validation_status = ValidationStatus.not_run
-        q.is_published = False
-        
-    await db.delete(assertion)
+    db.add(new_q)
     await db.commit()
-    return None
+    await db.refresh(new_q)
+    return new_q
 
+
+@router.get("/{question_id}")
+async def get_question(question_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return q
 
 
 @router.get("")
 async def list_questions(db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Question).order_by(Question.created_at.desc()))
-    questions = result.scalars().all()
-    return questions
+    return result.scalars().all()
 
+
+@router.put("/{question_id}/code-solution")
+async def update_code_solution(
+    question_id: str,
+    req: UpdateCodeSolutionReq,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    q.reference_html = req.reference_html
+    q.reference_css = req.reference_css
+    q.reference_js = req.reference_js
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.put("/{question_id}")
+async def update_question(
+    question_id: str,
+    req: CreateQuestionReq,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    if req.is_published and not q.reference_html:
+        raise HTTPException(status_code=400, detail="A reference HTML solution must be saved before publishing.")
+    if req.is_published:
+        assert_res = await db.execute(
+            select(Assertion)
+            .where(Assertion.question_id == question_id)
+            .order_by(Assertion.order)
+        )
+        current_assertions = assert_res.scalars().all()
+        if not current_assertions:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot publish a question with no assertions. Generate assertions first.",
+            )
+        split = await _validate_against_reference(q, list(current_assertions), db)
+        if split["failed"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{len(split['failed'])} assertions still fail against the reference solution. Fix them before publishing.",
+            )
+
+    q.title = req.title
+    q.description_html = req.description_html
+    q.question_type = req.question_type
+    q.is_published = req.is_published
+    await db.commit()
+    await db.refresh(q)
+    return q
+
+
+# ── Assertion generation (async job-based) ─────────────────────────────────
+
+@router.post("/{question_id}/generate-assertions")
+async def generate_assertions(
+    question_id: str,
+    bg: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    if not q.reference_html:
+        raise HTTPException(
+            status_code=400,
+            detail="A reference HTML solution must be saved before generating assertions.",
+        )
+
+    # Concurrency guard: one active job per question
+    active = await db.execute(
+        select(AssertionGenerationJob).where(
+            AssertionGenerationJob.question_id == question_id,
+            AssertionGenerationJob.status.in_(
+                [JobStatus.queued, JobStatus.analyzing, JobStatus.validating]
+            ),
+        )
+    )
+    if active.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="A generation job is already running for this question.")
+
+    job = AssertionGenerationJob(question_id=question_id, mode="full", target_count=6)
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    bg.add_task(
+        _run_generation_job,
+        job.id, question_id, "full", None, None, 6, 0,
+    )
+    return _build_job_response(job)
+
+
+@router.post("/{question_id}/assertions/complete")
+async def complete_assertions(
+    question_id: str,
+    req: CompleteAssertionsReq,
+    bg: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Button 1: keep passing assertions, fill quota with NEW diverse ones."""
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    active = await db.execute(
+        select(AssertionGenerationJob).where(
+            AssertionGenerationJob.question_id == question_id,
+            AssertionGenerationJob.status.in_(
+                [JobStatus.queued, JobStatus.analyzing, JobStatus.validating]
+            ),
+        )
+    )
+    if active.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="A generation job is already running.")
+
+    job = AssertionGenerationJob(
+        question_id=question_id,
+        mode="diversify",
+        keep_assertion_ids=json.dumps(req.keep_assertion_ids),
+        target_count=req.target_count,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    bg.add_task(
+        _run_generation_job,
+        job.id, question_id, "diversify",
+        req.keep_assertion_ids, None, req.target_count, 0,
+    )
+    return _build_job_response(job)
+
+
+@router.post("/{question_id}/assertions/repair")
+async def repair_assertions(
+    question_id: str,
+    req: RepairAssertionsReq,
+    bg: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Button 2: keep passing assertions, regenerate replacements for the failed ones."""
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+
+    # Optimistic-concurrency guard: reject if assertion set has changed since client last saw it
+    sample_res = await db.execute(
+        select(Assertion).where(Assertion.id.in_(req.keep_assertion_ids)).limit(1)
+    )
+    sample = sample_res.scalar_one_or_none()
+    if sample and sample.assertion_set_version != req.assertion_set_version:
+        raise HTTPException(
+            status_code=409,
+            detail="Assertion set has changed since you last loaded this page. Refresh and try again.",
+        )
+
+    active = await db.execute(
+        select(AssertionGenerationJob).where(
+            AssertionGenerationJob.question_id == question_id,
+            AssertionGenerationJob.status.in_(
+                [JobStatus.queued, JobStatus.analyzing, JobStatus.validating]
+            ),
+        )
+    )
+    if active.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail="A generation job is already running.")
+
+    # Count how many repair rounds already happened
+    recent_repairs = await db.execute(
+        select(AssertionGenerationJob).where(
+            AssertionGenerationJob.question_id == question_id,
+            AssertionGenerationJob.mode == "repair",
+            AssertionGenerationJob.status == JobStatus.completed,
+        )
+    )
+    round_count = len(recent_repairs.scalars().all())
+    if round_count >= MAX_REPAIR_ROUNDS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Auto-repair has been attempted {round_count} times for this assertion set. "
+                "Please edit the failing assertions manually using the edit button."
+            ),
+        )
+
+    target_count = len(req.keep_assertion_ids) + len(req.failed_assertion_ids)
+    job = AssertionGenerationJob(
+        question_id=question_id,
+        mode="repair",
+        keep_assertion_ids=json.dumps(req.keep_assertion_ids),
+        failed_assertion_ids=json.dumps(req.failed_assertion_ids),
+        target_count=target_count,
+        repair_round=round_count + 1,
+    )
+    db.add(job)
+    await db.commit()
+    await db.refresh(job)
+
+    bg.add_task(
+        _run_generation_job,
+        job.id, question_id, "repair",
+        req.keep_assertion_ids, req.failed_assertion_ids, target_count, round_count + 1,
+    )
+    return _build_job_response(job)
+
+
+@router.post("/{question_id}/generation-jobs/{job_id}/cancel")
+async def cancel_job(
+    question_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Cancel an in-flight job (marks it cancelled; the background task checks this flag)."""
+    job = await db.get(AssertionGenerationJob, job_id)
+    if not job or job.question_id != question_id:
+        raise HTTPException(status_code=404)
+    if job.status not in (JobStatus.queued, JobStatus.analyzing, JobStatus.validating):
+        raise HTTPException(status_code=409, detail="Job is not in a cancellable state.")
+    job.status = JobStatus.cancelled
+    job.finished_at = datetime.utcnow()
+    await db.commit()
+    return {"status": "cancelled"}
+
+
+@router.get("/{question_id}/generation-jobs/active")
+async def get_active_job(question_id: str, db: AsyncSession = Depends(get_db)):
+    """Return the most recent in-flight or completed job for this question."""
+    res = await db.execute(
+        select(AssertionGenerationJob)
+        .where(AssertionGenerationJob.question_id == question_id)
+        .order_by(AssertionGenerationJob.started_at.desc())
+        .limit(1)
+    )
+    job = res.scalar_one_or_none()
+    if not job:
+        raise HTTPException(status_code=404, detail="No job found")
+
+    payload = _build_job_response(job)
+
+    # If completed, also include the current assertions so the frontend can render immediately
+    if job.status == JobStatus.completed:
+        a_res = await db.execute(
+            select(Assertion)
+            .where(Assertion.question_id == question_id)
+            .order_by(Assertion.order)
+        )
+        assertions = a_res.scalars().all()
+        payload["assertions"] = [_serialize_assertion(a) for a in assertions]
+        # Parse pass/fail counts from the stored JSON in error_message
+        try:
+            counts = json.loads(job.error_message or "{}")
+            payload["passed_count"] = counts.get("passed_count", 0)
+            payload["failed_count"] = counts.get("failed_count", 0)
+        except Exception:
+            pass
+
+    return payload
+
+
+@router.get("/{question_id}/generation-jobs/{job_id}")
+async def get_job_status(
+    question_id: str,
+    job_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    job = await db.get(AssertionGenerationJob, job_id)
+    if not job or job.question_id != question_id:
+        raise HTTPException(status_code=404)
+
+    payload = _build_job_response(job)
+
+    if job.status == JobStatus.completed:
+        a_res = await db.execute(
+            select(Assertion)
+            .where(Assertion.question_id == question_id)
+            .order_by(Assertion.order)
+        )
+        assertions = a_res.scalars().all()
+        payload["assertions"] = [_serialize_assertion(a) for a in assertions]
+        try:
+            counts = json.loads(job.error_message or "{}")
+            payload["passed_count"] = counts.get("passed_count", 0)
+            payload["failed_count"] = counts.get("failed_count", 0)
+        except Exception:
+            pass
+
+    return payload
+
+
+# ── Assertion CRUD ─────────────────────────────────────────────────────────
+
+@router.get("/{question_id}/assertions")
+async def get_assertions(question_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Assertion)
+        .where(Assertion.question_id == question_id)
+        .order_by(Assertion.order)
+    )
+    return [_serialize_assertion(a) for a in result.scalars().all()]
+
+
+@router.post("/{question_id}/assertions")
+async def create_assertion(
+    question_id: str, req: CreateAssertionReq, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
+    order = len(result.scalars().all())
+    new_a = Assertion(
+        question_id=question_id,
+        order=order,
+        trigger=req.trigger,
+        trigger_selector=req.trigger_selector,
+        check_selector=req.check_selector,
+        check_type=req.check_type,
+        expected_result=req.expected_result,
+        points=req.points,
+        is_sample=req.is_sample,
+        source="author_added",
+    )
+    db.add(new_a)
+    await db.commit()
+    await db.refresh(new_a)
+    return _serialize_assertion(new_a)
+
+
+@router.put("/assertions/{assertion_id}")
+async def update_assertion(
+    assertion_id: str, req: UpdateAssertionReq, db: AsyncSession = Depends(get_db)
+):
+    result = await db.execute(select(Assertion).where(Assertion.id == assertion_id))
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assertion not found")
+    for field, val in req.model_dump(exclude_none=True).items():
+        setattr(a, field, val)
+    # Any manual edit resets validation status so the author knows to re-validate
+    a.last_validation_status = "not_run"
+    a.last_validation_error = None
+    await db.commit()
+    await db.refresh(a)
+    return _serialize_assertion(a)
+
+
+@router.delete("/assertions/{assertion_id}", status_code=204)
+async def delete_assertion(assertion_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Assertion).where(Assertion.id == assertion_id))
+    a = result.scalar_one_or_none()
+    if not a:
+        raise HTTPException(status_code=404, detail="Assertion not found")
+    await db.execute(
+        text("DELETE FROM evaluation_results WHERE assertion_id=:aid"), {"aid": assertion_id}
+    )
+    q_res = await db.execute(select(Question).where(Question.id == a.question_id))
+    q = q_res.scalar_one_or_none()
+    if q:
+        q.validation_status = ValidationStatus.not_run
+        q.is_published = False
+    await db.delete(a)
+    await db.commit()
+
+
+# ── Misc ───────────────────────────────────────────────────────────────────
+
+@router.post("/{question_id}/generate-edge-cases")
+async def generate_edge_cases(question_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    a_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
+    existing = [
+        {"check_type": a.check_type, "expected_result": a.expected_result}
+        for a in a_res.scalars().all()
+    ]
+    try:
+        suggestions = await generate_edge_cases_from_llm(
+            title=q.title,
+            description=q.description_html,
+            existing_assertions=existing,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"LLM edge-case generation failed: {e}")
+    return {"suggestions": suggestions}
 
 
 @router.post("/{question_id}/code-solution/validate")
@@ -370,28 +738,19 @@ async def validate_reference_solution(question_id: str, db: AsyncSession = Depen
     if not q:
         raise HTTPException(status_code=404, detail="Question not found")
     if not q.reference_html:
-        raise HTTPException(status_code=400, detail="A reference HTML solution must be saved before validating assertions.")
-        
-    assert_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id).order_by(Assertion.order))
-    assertions = assert_res.scalars().all()
-    
+        raise HTTPException(status_code=400, detail="A reference HTML solution must be saved first.")
+    a_res = await db.execute(
+        select(Assertion).where(Assertion.question_id == question_id).order_by(Assertion.order)
+    )
+    assertions = a_res.scalars().all()
     if not assertions:
         return {"results": [], "all_passed": True}
-        
-    results = await evaluate_submission(
-        html=q.reference_html or "",
-        css=q.reference_css or "",
-        js=q.reference_js or "",
-        assertions=assertions
-    )
-    
-    all_passed = all(r["passed"] for r in results)
-    
-    q.validation_status = ValidationStatus.passed if all_passed else ValidationStatus.failed
-    q.last_validation_results = json.dumps(results)
-    await db.commit()
-    
-    return {"results": results, "all_passed": all_passed}
+    split = await _validate_against_reference(q, list(assertions), db)
+    return {
+        "results": [_serialize_assertion(a) for a in assertions],
+        "all_passed": len(split["failed"]) == 0,
+    }
+
 
 @router.get("/{question_id}/export")
 async def export_question(question_id: str, db: AsyncSession = Depends(get_db)):
@@ -399,10 +758,7 @@ async def export_question(question_id: str, db: AsyncSession = Depends(get_db)):
     q = q_res.scalar_one_or_none()
     if not q:
         raise HTTPException(status_code=404)
-        
     a_res = await db.execute(select(Assertion).where(Assertion.question_id == question_id))
-    assertions = a_res.scalars().all()
-    
     return {
         "version": "1.0",
         "question": {
@@ -411,10 +767,11 @@ async def export_question(question_id: str, db: AsyncSession = Depends(get_db)):
             "question_type": q.question_type,
             "reference_html": q.reference_html,
             "reference_css": q.reference_css,
-            "reference_js": q.reference_js
+            "reference_js": q.reference_js,
         },
-        "assertions": [{"trigger": a.trigger, "trigger_selector": a.trigger_selector, "check_selector": a.check_selector, "check_type": a.check_type, "expected_result": a.expected_result, "points": a.points} for a in assertions]
+        "assertions": [_serialize_assertion(a) for a in a_res.scalars().all()],
     }
+
 
 @router.post("/import")
 async def import_question(data: dict, db: AsyncSession = Depends(get_db)):
@@ -427,65 +784,23 @@ async def import_question(data: dict, db: AsyncSession = Depends(get_db)):
         question_type=q_data.get("question_type", "HTML/CSS/JS"),
         reference_html=q_data.get("reference_html", ""),
         reference_css=q_data.get("reference_css", ""),
-        reference_js=q_data.get("reference_js", "")
+        reference_js=q_data.get("reference_js", ""),
     )
     db.add(q)
     await db.commit()
     await db.refresh(q)
-    
-    assertions_data = data.get("assertions", [])
-    for i, a in enumerate(assertions_data):
-        new_a = Assertion(
-            question_id=q.id,
-            order=i,
-            trigger=a.get("trigger", "page_load"),
-            trigger_selector=a.get("trigger_selector", ""), check_selector=a.get("check_selector", ""),
-            check_type=a.get("check_type", "dom_presence"),
-            expected_result=a.get("expected_result", ""),
-            points=a.get("points", 5)
+    for i, a in enumerate(data.get("assertions", [])):
+        db.add(
+            Assertion(
+                question_id=q.id,
+                order=i,
+                trigger=a.get("trigger", "page_load"),
+                trigger_selector=a.get("trigger_selector", ""),
+                check_selector=a.get("check_selector", ""),
+                check_type=a.get("check_type", "dom_presence"),
+                expected_result=a.get("expected_result", ""),
+                points=a.get("points", 5),
+            )
         )
-        db.add(new_a)
     await db.commit()
     return {"id": q.id, "message": "Imported successfully"}
-
-
-@router.put("/{question_id}")
-async def update_question(
-    question_id: str, 
-    req: CreateQuestionReq, 
-    db: AsyncSession = Depends(get_db)
-):
-    result = await db.execute(select(Question).where(Question.id == question_id))
-    q = result.scalar_one_or_none()
-    if not q:
-        raise HTTPException(status_code=404, detail="Question not found")
-    if req.is_published and not q.reference_html:
-        raise HTTPException(status_code=400, detail="A reference HTML solution must be saved before publishing.")
-    if req.is_published:
-        # Hard gate: actively re-run assertions against reference solution.
-        # Checking validation_status alone is not enough — it can go stale
-        # if assertions or the reference solution were edited after last validation.
-        assert_res = await db.execute(
-            select(Assertion)
-            .where(Assertion.question_id == question_id)
-            .order_by(Assertion.order)
-        )
-        current_assertions = assert_res.scalars().all()
-        if not current_assertions:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot publish a question with no assertions. Generate assertions first."
-            )
-        # This will raise 400 if reference fails its own assertions
-        await _validate_against_reference(q, list(current_assertions), db)
-    
-    q.title = req.title
-    q.description_html = req.description_html
-    q.question_type = req.question_type
-    q.is_published = req.is_published
-    
-    await db.commit()
-    await db.refresh(q)
-    return q
-
-

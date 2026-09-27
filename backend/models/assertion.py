@@ -64,6 +64,8 @@ class Assertion(Base):
 
     assertion_set_version: Mapped[int] = mapped_column(Integer, default=1)
 
+    last_validation_status: Mapped[str] = mapped_column(String(20), default="not_run")
+    last_validation_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
