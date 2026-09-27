@@ -1,4 +1,4 @@
-﻿import json
+import json
 import re
 from config import settings
 from models import Question, Submission
@@ -29,6 +29,12 @@ Score the submission out of 50 points across these 5 dimensions (10 pts each):
 3. Visual Design - Does the UI look reasonable and usable?
 4. Edge Cases - Are inputs validated / errors handled?
 5. Completeness - Are all parts of the question attempted?
+
+Also identify:
+- strengths: 1-4 short, specific things the candidate did well (reference actual code/behavior, not generic praise)
+- improvements: 1-4 short, specific, actionable gaps tied to a dimension above that scored below 8/10
+
+If a dimension scored 8 or higher, do not invent a criticism for it just to fill the list. It is fine for improvements to be shorter than strengths.
 """
 
 VERIFY_PROMPT = """

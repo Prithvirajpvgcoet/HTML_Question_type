@@ -177,7 +177,8 @@ async def process_evaluation_task(submission_id: str):
                             html=submission.submitted_html or "",
                             css=submission.submitted_css or "",
                             js=submission.submitted_js or "",
-                            eval_results=eval_feedback_list
+                            eval_results=eval_feedback_list,
+                            llm_grade=llm_result
                         )
                         submission.ai_feedback_text = feedback_text
                     except Exception as e:

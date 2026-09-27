@@ -68,6 +68,17 @@ export function ReportPage() {
   const scorePercent = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
   const isPassed = scorePercent >= 70;
 
+  let breakdownData: any = {};
+  if (report?.ai_feedback_breakdown) {
+    try {
+      breakdownData = typeof report.ai_feedback_breakdown === 'string' 
+        ? JSON.parse(report.ai_feedback_breakdown) 
+        : report.ai_feedback_breakdown;
+    } catch (e) {
+      console.warn("Failed to parse ai_feedback_breakdown", e);
+    }
+  }
+
   let gradeBand = "Insufficient";
   let gradeColor = "text-red-700";
   let gradeBg = "bg-[#FEF2F2]";
@@ -366,13 +377,13 @@ export function ReportPage() {
                 </div>
                 
                 <div className="space-y-5">
-                  {(report?.ai_feedback_breakdown ? [
-                    { label: "Functional Correctness", val: (report.ai_feedback_breakdown.functional || 0) * 10, color: "bg-emerald-500" },
-                    { label: "Code Structure", val: (report.ai_feedback_breakdown.structure || 0) * 10, color: "bg-blue-500" },
-                    { label: "Visual Design", val: (report.ai_feedback_breakdown.design || 0) * 10, color: "bg-purple-500" },
-                    { label: "Edge Case Handling", val: (report.ai_feedback_breakdown.edge_cases || 0) * 10, color: "bg-orange-500" },
-                    { label: "Completeness", val: (report.ai_feedback_breakdown.completeness || 0) * 10, color: "bg-cyan-500" },
-                  ] : []).map((m, i) => (
+                  {([
+                    { label: "Functional Correctness", val: (breakdownData.functional || 0) * 10, color: "bg-emerald-500" },
+                    { label: "Code Structure", val: (breakdownData.structure || 0) * 10, color: "bg-blue-500" },
+                    { label: "Visual Design", val: (breakdownData.design || 0) * 10, color: "bg-purple-500" },
+                    { label: "Edge Case Handling", val: (breakdownData.edge_cases || 0) * 10, color: "bg-orange-500" },
+                    { label: "Completeness", val: (breakdownData.completeness || 0) * 10, color: "bg-cyan-500" },
+                  ]).map((m, i) => (
                     <div key={i}>
                       <div className="flex justify-between text-sm mb-1.5">
                         <span className="text-gray-600">{m.label}</span>
@@ -482,7 +493,7 @@ export function ReportPage() {
                 <CheckCircle2 className="w-4 h-4" /> Strengths
               </h4>
               <ul className="space-y-2.5">
-                {(report?.ai_feedback_breakdown?.strengths?.length ? report.ai_feedback_breakdown.strengths : ["No specific strengths recorded"]).map((s: string, i: number) => (
+                {(breakdownData?.strengths?.length ? breakdownData.strengths : ["No specific strengths recorded"]).map((s: string, i: number) => (
                   <li key={i} className="flex gap-2 text-sm text-gray-600 items-start">
                     <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
                     <span className="leading-tight">{s}</span>
@@ -496,7 +507,7 @@ export function ReportPage() {
                 <AlertCircle className="w-4 h-4" /> Areas for Improvement
               </h4>
               <ul className="space-y-2.5">
-                {(report?.ai_feedback_breakdown?.improvements?.length ? report.ai_feedback_breakdown.improvements : ["No specific areas for improvement recorded"]).map((s: string, i: number) => (
+                {(breakdownData?.improvements?.length ? breakdownData.improvements : ["No specific areas for improvement recorded"]).map((s: string, i: number) => (
                   <li key={i} className="flex gap-2 text-sm text-gray-600 items-start">
                     <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
                     <span className="leading-tight">{s}</span>
