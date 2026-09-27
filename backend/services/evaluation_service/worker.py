@@ -152,7 +152,7 @@ async def process_evaluation_task(submission_id: str):
                     submission.ai_confidence = "low"
                 else:
                     submission.llm_status = SubmissionLLMStatus.evaluated
-                    llm_result = await score_with_llm(submission, question)
+                    llm_result = await score_with_llm(submission, question, tc_passed_count, len(assertions))
                     # Clamp score between 0 and 50
                     llm_score = min(max(int(llm_result.get("score", 0)), 0), 50)
 
