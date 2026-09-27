@@ -13,9 +13,16 @@ class VerifyResult(BaseModel):
 class BatchVerifyResult(BaseModel):
     results: list[VerifyResult]
 
+class Breakdown(BaseModel):
+    functional: int
+    structure: int
+    design: int
+    edge_cases: int
+    completeness: int
+
 class LLMScore(BaseModel):
     score: int
-    breakdown: dict[str, int]
+    breakdown: Breakdown
     reasoning: str
     strengths: list[str] = Field(default_factory=list)
     improvements: list[str] = Field(default_factory=list)
@@ -107,11 +114,13 @@ async def score_with_llm(submission: Submission, question: Question, tc_passed: 
         )
         return result
     except Exception as e:
-        print(f"score_with_llm failed: {e}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.error(f"score_with_llm failed (API error or schema rejection): {e}", exc_info=True)
         return {
             "score": 0,
             "breakdown": {"functional": 0, "structure": 0, "design": 0, "edge_cases": 0, "completeness": 0},
-            "reasoning": "Scoring failed.",
+            "reasoning": "Scoring failed due to an AI service error.",
             "strengths": [],
             "improvements": []
         }
