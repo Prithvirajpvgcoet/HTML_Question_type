@@ -648,7 +648,7 @@ export function AiAssertionsTab({
                 <label className="block text-sm font-medium text-gray-700 mb-1">Trigger</label>
                 <select
                   value={editingAssertion.trigger}
-                  onChange={(e) => setEditingAssertion({ ...editingAssertion, trigger: e.target.value })}
+                  onChange={(e) => setEditingAssertion({ ...editingAssertion, trigger: e.target.value as any })}
                   className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm"
                 >
                   {["page_load", "click", "hover", "input", "change"].map((t) => (
@@ -678,7 +678,7 @@ export function AiAssertionsTab({
                 <label className="block text-sm font-medium text-gray-700 mb-1">Check Type</label>
                 <select
                   value={editingAssertion.check_type}
-                  onChange={(e) => setEditingAssertion({ ...editingAssertion, check_type: e.target.value })}
+                  onChange={(e) => setEditingAssertion({ ...editingAssertion, check_type: e.target.value as any })}
                   className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm"
                 >
                   {["dom_presence", "computed_style", "text_content", "attribute"].map((t) => (
