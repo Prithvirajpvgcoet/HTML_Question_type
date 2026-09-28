@@ -21,7 +21,7 @@ export function QuestionsList() {
         candidate_email: candidateEmail,
       });
       const token = res.data.token;
-      const url = `http://localhost:5174/login/${token}`; // Use token in URL
+      const url = `${import.meta.env.VITE_CANDIDATE_URL || "http://localhost:5174"}/login/${token}`; // Use token in URL
       navigator.clipboard.writeText(url);
       setToast("Secure Test Link Copied!");
       setTimeout(() => setToast(''), 3000);

@@ -346,7 +346,7 @@ export function QuestionPreviewPage() {
               </button>
               <button
                 onClick={() => {
-                  const url = `http://localhost:5174/test/${id}`;
+                  const url = `${import.meta.env.VITE_CANDIDATE_URL || "http://localhost:5174"}/test/${id}`;
                   navigator.clipboard.writeText(url);
                 }}
                 className="w-full flex items-center justify-center gap-2 text-sm text-blue-600 border border-blue-200 rounded-md px-4 py-2 hover:bg-blue-50 font-medium"
