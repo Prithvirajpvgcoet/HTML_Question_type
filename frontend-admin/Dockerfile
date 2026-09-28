@@ -1,7 +1,11 @@
 FROM node:18-alpine as build
 WORKDIR /app
 COPY package*.json ./
-RUN npm install
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+ARG VITE_CANDIDATE_URL
+ENV VITE_CANDIDATE_URL=$VITE_CANDIDATE_URL
+RUN npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
 
