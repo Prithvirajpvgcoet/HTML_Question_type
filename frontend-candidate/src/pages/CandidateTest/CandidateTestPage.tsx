@@ -6,14 +6,14 @@ import { LivePreview } from "../../components/LivePreview";
 import {
   Clock,
   ChevronLeft,
-  ChevronRight,
+  
   RotateCcw,
   Play,
   AlertTriangle,
   Info,
-  Code2,
+  
   Maximize2,
-  LayoutGrid,
+  
 } from "lucide-react";
 import type { Question } from "../../shared/types";
 import { useCandidateStore } from "../../store/candidateStore";

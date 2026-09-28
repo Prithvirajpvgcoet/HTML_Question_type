@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCandidateStore } from "../../store/candidateStore";
 
@@ -7,7 +7,7 @@ import { api } from "../../api/client";
 export function CandidateLoginPage() {
   const { token } = useParams();
   const navigate = useNavigate();
-  const { candidateName, setCandidateInfo } = useCandidateStore();
+  const { setCandidateInfo } = useCandidateStore();
   
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -25,7 +25,7 @@ export function CandidateLoginPage() {
         setCandidateInfo(candidate_name, candidate_email);
         navigate(`/test/${question_id}`, { replace: true });
       })
-      .catch(err => {
+      .catch(() => {
         setError("This invite link is invalid or has expired.");
         setLoading(false);
       });
