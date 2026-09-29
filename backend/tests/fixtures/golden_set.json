@@ -1,0 +1,131 @@
+{
+  "name": "html_css_js_counter_fixture",
+  "description": "Reusable regression fixture for the Playwright evaluator. Good submissions must score 100; broken submissions must score below 100.",
+  "assertions": [
+    {
+      "id": "message",
+      "trigger": "page_load",
+      "check_type": "text_content",
+      "check_selector": "#message",
+      "expected_value": "Ready",
+      "operator": "equals",
+      "points": 25,
+      "execution_mode": "isolated"
+    },
+    {
+      "id": "button",
+      "trigger": "page_load",
+      "check_type": "dom_presence",
+      "check_selector": "#increment",
+      "expected_value": null,
+      "operator": "exists",
+      "points": 25,
+      "execution_mode": "isolated"
+    },
+    {
+      "id": "style",
+      "trigger": "page_load",
+      "check_type": "computed_style",
+      "check_selector": "#message",
+      "property_name": "color",
+      "expected_value": "rgb(0, 128, 0)",
+      "operator": "equals",
+      "points": 25,
+      "execution_mode": "isolated"
+    },
+    {
+      "id": "function",
+      "trigger": "call_function",
+      "trigger_selector": "setProgress",
+      "input_value": "[5]",
+      "check_type": "text_content",
+      "check_selector": "#count",
+      "expected_value": "5",
+      "operator": "equals",
+      "points": 25,
+      "execution_mode": "isolated"
+    }
+  ],
+  "good_submissions": [
+    {
+      "name": "static_text",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "extra_markup",
+      "html": "<main><div id=\"message\">Ready</div></main><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: green; }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "nested_counter",
+      "html": "<section><div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span></section>",
+      "css": "#message { color: #008000; }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "attribute_preserved",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\" type=\"button\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "whitespace_text",
+      "html": "<div id=\"message\"> Ready </div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "data_wrapper",
+      "html": "<div data-app><div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span></div>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "let_function",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "window.setProgress = function(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "script_updates",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "const count = document.querySelector('#count'); function setProgress(value) { count.textContent = String(value); }"
+    },
+    {
+      "name": "semantic_button",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\" aria-label=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "css_hex",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: #008000; }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    }
+  ],
+  "broken_submissions": [
+    {
+      "name": "missing_button",
+      "html": "<div id=\"message\">Ready</div><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "wrong_text",
+      "html": "<div id=\"message\">Done</div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = String(value); }"
+    },
+    {
+      "name": "broken_function",
+      "html": "<div id=\"message\">Ready</div><button id=\"increment\">+</button><span id=\"count\">0</span>",
+      "css": "#message { color: rgb(0, 128, 0); }",
+      "js": "function setProgress(value) { document.querySelector('#count').textContent = 'wrong'; }"
+    }
+  ]
+}

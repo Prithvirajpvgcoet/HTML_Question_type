@@ -78,13 +78,16 @@ async def get_evaluation_report(submission_id: str, db: AsyncSession = Depends(g
             "assertion_id": r.assertion_id,
             "status": r.tc_status,
             "actual_result": r.actual_result,
+            "evidence_text": r.evidence_text,
+            "blocked_by": r.blocked_by_assertion_id,
             "points_awarded": r.points_awarded,
-            "llm_status": r.llm_status,
-            "llm_evidence": r.llm_evidence_text,
             # Assertion details
             "assertion_trigger": a.trigger if a else None,
             "assertion_check_type": a.check_type if a else None,
-            "assertion_expected": a.expected_result if a else None,
+            "assertion_expected": a.expected_value if a else None,
+            "assertion_operator": (
+                a.operator.value if a and hasattr(a.operator, "value") else (a.operator if a else None)
+            ),
             "assertion_points": a.points if a else 0,
             "assertion_is_sample": a.is_sample if a else False,
             "assertion_trigger_selector": a.trigger_selector if a else None, "assertion_check_selector": a.check_selector if a else None,

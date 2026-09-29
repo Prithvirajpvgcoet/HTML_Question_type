@@ -3,12 +3,12 @@
 # assertion_set_version is bumped whenever a prompt version here changes.
 
 validation:
-  version: "v1"
-  file: "validation/v1.md"
+  version: "v2"
+  file: "validation/v2.md"
 
 generation:
-  version: "v1"
-  file: "generation/v1.md"
+  version: "v2"
+  file: "generation/v2.md"
 
 llm_verification:
   version: "v1"

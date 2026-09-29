@@ -1,111 +1,167 @@
-import re
 import asyncio
+import multiprocessing
+from queue import Empty
+from typing import Any
+
 from playwright.sync_api import sync_playwright
+
 from services.evaluation_service.evaluator import (
-    CandidateEvaluator, Assertion, TriggerType, CheckType
+    Assertion,
+    CandidateEvaluator,
+    CheckType,
+    Operator,
+    TriggerType,
 )
 
-def parse_expected_result(check_type: str, expected_result: str) -> tuple[str | None, str]:
-    """
-    Parses 'type: password', 'value=testuser', 'text: Log in', 'background-color: red'
-    into (property_name, expected_value) — tolerant of ':' or '=' as the delimiter.
-    """
-    raw = str(expected_result).strip() if expected_result else ""
-    match = re.match(r'^([\w\-]+)\s*[:=]\s*(.*)$', raw)
-    if not match:
-        return None, raw
 
-    prop, value = match.group(1), match.group(2).strip()
+SUBMISSION_TIMEOUT_SECONDS = 30
+FIXED_EPOCH_MS = 1704067200000
 
-    if check_type in ("computed_style", "attribute"):
-        return prop, value
-    if check_type == "text_content" and prop.lower() in ("text", "content", "text_content", "textcontent"):
-        return None, value          # strip the label, keep the real expected text
-    return None, raw
 
-def _run_sync_evaluation(html: str, css: str, js: str, assertions: list) -> list:
-    with sync_playwright() as p:
-        browser = p.chromium.launch(
+def _value(value: Any, default: Any = None) -> Any:
+    if value is None:
+        return default
+    return value.value if hasattr(value, "value") else value
+
+
+def serialize_assertion(item: Any) -> dict:
+    if isinstance(item, dict):
+        return dict(item)
+    return {
+        "id": getattr(item, "id", None),
+        "trigger": _value(getattr(item, "trigger", None), "page_load"),
+        "trigger_selector": getattr(item, "trigger_selector", None),
+        "input_value": getattr(item, "input_value", None),
+        "check_type": _value(getattr(item, "check_type", None), "dom_presence"),
+        "check_selector": getattr(item, "check_selector", None),
+        "property_name": getattr(item, "property_name", None),
+        "operator": _value(getattr(item, "operator", None), "equals"),
+        "expected_value": getattr(item, "expected_value", None),
+        "wait_ms": getattr(item, "wait_ms", 0),
+        "points": getattr(item, "points", 0),
+        "group_id": getattr(item, "group_id", None),
+        "sequence_order": getattr(item, "sequence_order", None),
+        "execution_mode": _value(getattr(item, "execution_mode", None), "isolated"),
+    }
+
+
+def _run_sync_evaluation(html: str, css: str, js: str, assertions: list[dict], capture_only: bool) -> list[dict]:
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(
             headless=True,
-            args=[
-                "--disable-dev-shm-usage",
-                "--no-sandbox",
-                "--disable-web-security"
-            ]
+            args=["--disable-dev-shm-usage", "--no-sandbox"],
         )
         context = browser.new_context(
             java_script_enabled=True,
-            offline=True
+            offline=True,
+            viewport={"width": 1280, "height": 720},
+            locale="en-US",
+            timezone_id="UTC",
+            device_scale_factor=1,
+            service_workers="block",
+        )
+        context.set_default_timeout(3000)
+        context.route("**/*", lambda route: route.abort())
+        context.add_init_script(
+            f"""
+            (() => {{
+              let seed = 123456789;
+              Math.random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
+              const RealDate = Date;
+              const fixedEpoch = {FIXED_EPOCH_MS};
+              Date = class extends RealDate {{
+                constructor(...args) {{ super(...(args.length ? args : [fixedEpoch])); }}
+                static now() {{ return fixedEpoch; }}
+              }};
+            }})();
+            """
         )
         page = context.new_page()
-        
-        # Block network for security
-        page.route("**/*", lambda route: route.abort())
-        
-        evaluator = CandidateEvaluator(page)
-        
-        # We need to map dict assertions back into the evaluator's Assertion dataclass
-        dataclass_assertions = []
-        for a in assertions:
-            expected_raw = a.get("expected_result", "")
-            check_type_str = a.get("check_type", "dom_presence")
-            
-            prop_name, expected = parse_expected_result(check_type_str, expected_raw)
-            
-            dataclass_assertions.append(Assertion(
-                id=a.get("id", "temp"),
-                trigger=TriggerType(a.get("trigger", "page_load")),
-                trigger_selector=a.get("trigger_selector", ""), check_selector=a.get("check_selector", ""),
-                check_type=CheckType(check_type_str),
-                property_name=prop_name.strip() if prop_name else None,
-                expected_value=expected.strip() if expected else expected,
-                input_value="test",
-                points=a.get("points", 0),
-                group_id=a.get("group_id"),
-                sequence_order=a.get("sequence_order"),
-                execution_mode=a.get("execution_mode", "sequential")
-            ))
-
         try:
-            submission_result = evaluator.evaluate_submission(html, css, js, dataclass_assertions)
-            
-            # Map SubmissionResult back to the list format the API expects
-            # (which is {"assertion_id": "...", "passed": True, "actual_value": "...", "error": "...", "points_awarded": ...})
-            results = []
-            for ar in submission_result.assertion_results:
-                results.append({
-                    "assertion_id": ar.assertion_id,
-                    "passed": ar.status == "PASS",
-                    "actual_value": ar.actual or "",
-                    "error": ar.message if ar.status != "PASS" else "",
-                    "points_awarded": ar.points_awarded
-                })
-            return results
+            clock = getattr(page, "clock", None)
+            if clock:
+                clock.install(time=FIXED_EPOCH_MS)
+        except Exception:
+            pass
+        evaluator = CandidateEvaluator(page)
+        typed = [
+            Assertion(
+                id=str(item.get("id") or f"temp-{index}"),
+                trigger=TriggerType(item.get("trigger", "page_load")),
+                trigger_selector=item.get("trigger_selector"),
+                input_value=item.get("input_value"),
+                check_type=CheckType(item.get("check_type", "dom_presence")),
+                check_selector=item.get("check_selector"),
+                property_name=item.get("property_name"),
+                operator=Operator(item.get("operator", "equals")),
+                expected_value=item.get("expected_value"),
+                wait_ms=int(item.get("wait_ms") or 0),
+                points=int(item.get("points") or 0),
+                group_id=item.get("group_id"),
+                sequence_order=item.get("sequence_order"),
+                execution_mode=item.get("execution_mode", "isolated"),
+            )
+            for index, item in enumerate(assertions)
+        ]
+        try:
+            result = evaluator.evaluate_submission(html, css, js, typed, capture_only=capture_only)
+            return [
+                {
+                    "assertion_id": item.assertion_id,
+                    "status": item.status.lower(),
+                    "passed": item.status == "PASS",
+                    "actual_value": item.actual,
+                    "expected_value": item.expected,
+                    "error": item.message if item.status != "PASS" else "",
+                    "reason": item.reason,
+                    "blocked_by": item.blocked_by,
+                    "points_awarded": item.points_awarded,
+                }
+                for item in result.assertion_results
+            ]
         finally:
             context.close()
             browser.close()
 
-async def evaluate_submission(html: str, css: str, js: str, assertions: list) -> list:
-    # Serialize SQLAlchemy models into plain dicts
-    serialized_assertions = []
-    for a in assertions:
-        serialized_assertions.append({
-            "id": getattr(a, "id", None),
-            "trigger": getattr(a, "trigger", None),
-            "trigger_selector": getattr(a, "trigger_selector", ""), "check_selector": getattr(a, "check_selector", ""),
-            "check_type": getattr(a, "check_type", None),
-            "expected_result": getattr(a, "expected_result", ""),
-            "wait_ms": getattr(a, "wait_ms", 0),
-            "points": getattr(a, "points", 0),
-            "group_id": getattr(a, "group_id", None),
-            "sequence_order": getattr(a, "sequence_order", None),
-            "execution_mode": getattr(a, "execution_mode", "sequential")
-        })
-        
-    return await asyncio.to_thread(
-        _run_sync_evaluation, 
-        html, 
-        css, 
-        js, 
-        serialized_assertions
-    )
+
+def _process_entry(queue, html: str, css: str, js: str, assertions: list[dict], capture_only: bool) -> None:
+    try:
+        queue.put((True, _run_sync_evaluation(html, css, js, assertions, capture_only)))
+    except BaseException as exc:
+        queue.put((False, f"{type(exc).__name__}: {exc}"))
+
+
+def _run_with_hard_timeout(html: str, css: str, js: str, assertions: list[dict], capture_only: bool) -> list[dict]:
+    ctx = multiprocessing.get_context("spawn")
+    queue = ctx.Queue()
+    process = ctx.Process(target=_process_entry, args=(queue, html, css, js, assertions, capture_only), daemon=True)
+    process.start()
+    process.join(SUBMISSION_TIMEOUT_SECONDS)
+    if process.is_alive():
+        process.terminate()
+        process.join(3)
+        if process.is_alive() and hasattr(process, "kill"):
+            process.kill()
+            process.join()
+        raise TimeoutError(f"Playwright evaluation exceeded {SUBMISSION_TIMEOUT_SECONDS} seconds")
+    try:
+        ok, payload = queue.get(timeout=1)
+    except Empty as exc:
+        raise RuntimeError(f"Playwright worker exited with code {process.exitcode}") from exc
+    finally:
+        queue.close()
+    if not ok:
+        raise RuntimeError(payload)
+    return payload
+
+
+async def evaluate_submission(
+    html: str,
+    css: str,
+    js: str,
+    assertions: list,
+    *,
+    capture_only: bool = False,
+) -> list[dict]:
+    serialized = [serialize_assertion(item) for item in assertions]
+    return await asyncio.to_thread(_run_with_hard_timeout, html, css, js, serialized, capture_only)

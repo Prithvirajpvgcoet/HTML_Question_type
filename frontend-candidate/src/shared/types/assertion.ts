@@ -1,10 +1,12 @@
-export type TriggerType = "page_load" | "click" | "change" | "input" | "hover";
+export type TriggerType = "page_load" | "click" | "change" | "input" | "hover" | "call_function";
 export type CheckType =
   | "dom_presence"
+  | "dom_absence"
+  | "element_count"
   | "computed_style"
   | "text_content"
   | "attribute"
-  | "visual_region";
+  | "function_presence";
 export type AssertionSource = "ai_generated" | "author_added" | "ai_edited";
 
 export interface Assertion {
@@ -12,10 +14,14 @@ export interface Assertion {
   question_id: string;
   order: number;
   trigger: TriggerType;
-  selector: string;
+  trigger_selector?: string;
+  check_selector?: string;
   wait_ms: number;
   check_type: CheckType;
-  expected_result: string;
+  input_value?: string;
+  property_name?: string;
+  operator: "equals" | "contains" | "regex" | "exists" | "not_exists";
+  expected_value?: string;
   points: number;
   is_sample: boolean;
   source: AssertionSource;

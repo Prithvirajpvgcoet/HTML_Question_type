@@ -48,20 +48,16 @@ export function ReportPage() {
   const score = report?.total_score || 0;
   const tcPassed = report?.tc_passed || 0;
   const tcTotal = report?.tc_total || 0;
-  const maxScore = report?.max_score || (tcTotal * 5 + 50);
+  const maxScore = report?.max_score || (tcTotal * 10);
 
-  // BUG-12: Compute "Not Evaluated / Skipped" from real llm_status values
   const testCases = report?.results || [];
-  const tcSkipped = testCases.filter(
-    (tc: any) => tc.llm_status === "skipped_playwright_passed"
-  ).length;
-  const tcNotRun = testCases.filter(
-    (tc: any) => tc.llm_status === "not_run" || !tc.llm_status
-  ).length;
+  const normalizedStatus = (status: unknown) => String(status || "").toLowerCase();
+  const tcSkipped = testCases.filter((tc: any) => normalizedStatus(tc.status) === "skipped").length;
+  const tcNotRun = testCases.filter((tc: any) => normalizedStatus(tc.status) === "not_evaluated").length;
 
   const tcPassedRate = tcTotal > 0 ? Math.round((tcPassed / tcTotal) * 100) : 0;
-  const tcFailedRate = tcTotal > 0 ? 100 - tcPassedRate : 0;
-  const tcFailed = tcTotal - tcPassed;
+  const tcFailed = testCases.filter((tc: any) => normalizedStatus(tc.status) === "failed").length;
+  const tcFailedRate = tcTotal > 0 ? Math.round((tcFailed / tcTotal) * 100) : 0;
   const tcNotEvaluatedCount = tcSkipped + tcNotRun;
   const tcNotEvaluatedRate = tcTotal > 0 ? Math.round((tcNotEvaluatedCount / tcTotal) * 100) : 0;
   
@@ -144,7 +140,7 @@ export function ReportPage() {
           </div>
           <h2 className="text-xl font-bold text-gray-900 mb-2">Evaluation in Progress</h2>
           <p className="text-sm text-gray-500 leading-relaxed mb-4">
-            AI is running Playwright test cases and scoring the submission. This usually takes 20–60 seconds.
+            Playwright is running the published assertions and collecting browser evidence. This usually takes 20-60 seconds.
           </p>
           <div className="text-xs text-gray-400">Checking for updates every 3 seconds…</div>
         </div>
@@ -164,7 +160,7 @@ export function ReportPage() {
             <ChevronRight className="w-4 h-4 mx-1" />
             <span className="hover:text-blue-600 cursor-pointer">Candidate Report</span>
             <ChevronRight className="w-4 h-4 mx-1" />
-            <span className="font-semibold text-gray-900">AI Evaluation</span>
+            <span className="font-semibold text-gray-900">Playwright Evaluation</span>
           </div>
           <div className="flex gap-3">
             <button onClick={() => window.print()} className="flex items-center gap-2 border border-blue-200 text-blue-600 px-4 py-1.5 rounded-md text-sm font-semibold hover:bg-blue-50 transition-colors" title="Print or save as PDF">
@@ -205,12 +201,12 @@ export function ReportPage() {
                 <Trophy className="w-5 h-5 text-green-600" />
               </div>
               <div className="flex-1">
-                <div className="text-sm text-gray-600 font-medium mb-1">AI Test Case Pass Rate</div>
+                <div className="text-sm text-gray-600 font-medium mb-1">Assertion Pass Rate</div>
                 <div className="flex items-end justify-between mb-2">
                   <span className="text-2xl font-bold text-green-700 leading-none">{tcPassed} / {tcTotal}</span>
                 </div>
                 <div className="w-full bg-green-200 rounded-full h-2.5">
-                  <div className="bg-green-600 h-2.5 rounded-full" style={{ width: `${(tcPassed/tcTotal)*100}%` }}></div>
+                  <div className="bg-green-600 h-2.5 rounded-full" style={{ width: `${tcPassedRate}%` }}></div>
                 </div>
               </div>
             </div>
@@ -221,7 +217,7 @@ export function ReportPage() {
                 <Sparkles className={`w-5 h-5 ${gradeIconColor}`} />
               </div>
               <div className="flex-1">
-                <div className="text-sm text-gray-600 font-medium mb-1">AI Grade Assessment</div>
+                <div className="text-sm text-gray-600 font-medium mb-1">Playwright Score</div>
                 <div className="flex items-end justify-between mb-2">
                   <span className={`text-2xl font-bold ${gradeColor} leading-none`}>{gradeBand}</span>
                   <span className={`text-sm font-semibold ${gradeColor}`}>{scorePercent}%</span>
@@ -241,7 +237,7 @@ export function ReportPage() {
                 <div className="text-sm text-gray-600 font-medium mb-0.5">Verdict</div>
                 <div className={`text-xl font-bold mb-1 leading-none ${isPassed ? 'text-green-700' : 'text-red-700'}`}>{isPassed ? 'Passed' : 'Failed'}</div>
                 <p className={`text-[10px] leading-tight opacity-80 ${isPassed ? 'text-green-800' : 'text-red-800'}`}>
-                  {isPassed ? 'Solution is correct for most cases based on AI evaluation.' : 'Solution failed to meet the required criteria.'}
+                  {isPassed ? 'Solution passed most published assertions.' : 'Solution failed to meet the required criteria.'}
                 </p>
               </div>
             </div>
@@ -251,7 +247,7 @@ export function ReportPage() {
         {/* Tabs */}
         <div className="flex gap-6 border-b border-gray-100">
           <div onClick={() => setActiveTab('evaluation')} className={`px-1 py-3 text-sm cursor-pointer ${activeTab === 'evaluation' ? 'font-bold text-blue-600 border-b-2 border-blue-600' : 'font-medium text-gray-500 hover:text-gray-700'}`}>
-            AI Evaluation
+            Evaluation
           </div>
           <div onClick={() => setActiveTab('code')} className={`px-1 py-3 text-sm cursor-pointer ${activeTab === 'code' ? 'font-bold text-blue-600 border-b-2 border-blue-600' : 'font-medium text-gray-500 hover:text-gray-700'}`}>
             Candidate Code
@@ -305,13 +301,13 @@ export function ReportPage() {
               <div>
                 <div className="flex items-center gap-2 mb-1">
                   <ClipboardList className="w-5 h-5 text-blue-600" />
-                  <h2 className="text-lg font-bold text-gray-900">AI Generated Test Cases Results</h2>
+                  <h2 className="text-lg font-bold text-gray-900">Assertion Results</h2>
                   <Info className="w-4 h-4 text-gray-400" />
                 </div>
-                <p className="text-sm text-gray-500">The candidate's solution was evaluated using AI-generated test cases and LLM-based verification.</p>
+                <p className="text-sm text-gray-500">Playwright executed each assertion and recorded exact browser evidence.</p>
               </div>
               <button onClick={() => document.getElementById('tc-table')?.scrollIntoView({ behavior: 'smooth' })} className="flex items-center gap-2 text-blue-600 border border-blue-200 px-4 py-1.5 rounded-md text-sm font-semibold hover:bg-blue-50 transition-colors">
-                <Eye className="w-4 h-4" /> View All Test Cases
+                <Eye className="w-4 h-4" /> View All Assertions
               </button>
             </div>
 
@@ -320,23 +316,20 @@ export function ReportPage() {
                 <thead className="bg-[#F8FAFC] text-gray-700 font-semibold border-b border-gray-200">
                   <tr>
                     <th className="px-4 py-3 w-12">#</th>
-                    <th className="px-4 py-3">Test Case (AI Generated)</th>
+                    <th className="px-4 py-3">Assertion</th>
                     <th className="px-4 py-3 font-mono text-xs">Input</th>
-                    <th className="px-4 py-3">LLM Evaluation</th>
+                    <th className="px-4 py-3">Expected</th>
                     <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Reasoning (by LLM)</th>
+                    <th className="px-4 py-3">Actual browser value</th>
+                    <th className="px-4 py-3">Evidence</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {testCases.map((tc: any, i: number) => {
-                    const isPassedRow = tc.status === "passed";
-                    const evalText =
-                      tc.llm_status === "verified_pass" ? "Verified Pass" :
-                      tc.llm_status === "verified_fail" ? "Verified Fail" :
-                      tc.llm_status === "skipped_playwright_passed" ? "Passed (no LLM check needed)" :
-                      tc.llm_status === "error" ? "LLM Error" :
-                      "Not Evaluated";
-                    const statusText = isPassedRow ? "Passed" : "Failed";
+                    const rowStatus = normalizedStatus(tc.status);
+                    const isPassedRow = rowStatus === "passed";
+                    const isSkippedRow = rowStatus === "skipped";
+                    const statusText = isSkippedRow ? "Skipped" : isPassedRow ? "Passed" : "Failed";
                     const testName = tc.assertion_check_type ? tc.assertion_check_type.replace('_', ' ') : 'Test Case';
                     const inputVal = tc.assertion_trigger ? `${tc.assertion_trigger} on ${tc.assertion_trigger_selector}` : 'N/A';
                     
@@ -345,14 +338,15 @@ export function ReportPage() {
                         <td className="px-4 py-3 text-gray-500">{i + 1}</td>
                         <td className="px-4 py-3 text-gray-800 capitalize">{testName}</td>
                         <td className="px-4 py-3 text-gray-600 font-mono text-xs bg-gray-50 rounded mx-2 my-2">{inputVal}</td>
-                        <td className={`px-4 py-3 ${tc.llm_status === 'verified_fail' ? 'text-red-500' : 'text-gray-800'}`}>{evalText}</td>
+                        <td className="px-4 py-3 text-gray-800 font-mono text-xs">{tc.assertion_operator} {tc.assertion_expected ?? ""}</td>
                         <td className="px-4 py-3">
-                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${isPassedRow ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            {isPassedRow ? <CheckCircle2 className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+                          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${isPassedRow ? 'bg-green-100 text-green-700' : isSkippedRow ? 'bg-gray-100 text-gray-700' : 'bg-red-100 text-red-700'}`}>
+                            {isPassedRow ? <CheckCircle2 className="w-3 h-3" /> : isSkippedRow ? <Clock className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
                             {statusText}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-gray-600 text-xs">{tc.llm_evidence || tc.actual_result || "Evaluated."}</td>
+                        <td className="px-4 py-3 text-gray-600 text-xs font-mono">{tc.actual_result ?? tc.blocked_by ?? "No value"}</td>
+                        <td className="px-4 py-3 text-gray-600 text-xs">{tc.evidence_text ?? (tc.blocked_by ? `Blocked by ${tc.blocked_by}` : "")}</td>
                       </tr>
                     );
                   })}
@@ -373,16 +367,15 @@ export function ReportPage() {
                     <div className="w-1.5 h-5 bg-blue-600 rounded-sm"></div>
                     <div className="w-1.5 h-4 bg-blue-600 rounded-sm"></div>
                   </div>
-                  <h2 className="text-lg font-bold text-gray-900">Evaluation Metrics</h2>
+                  <h2 className="text-lg font-bold text-gray-900">Assertion Evidence</h2>
                 </div>
                 
                 <div className="space-y-5">
                   {([
-                    { label: "Functional Correctness", val: (breakdownData.functional || 0) * 10, color: "bg-emerald-500" },
-                    { label: "Code Structure", val: (breakdownData.structure || 0) * 10, color: "bg-blue-500" },
-                    { label: "Visual Design", val: (breakdownData.design || 0) * 10, color: "bg-purple-500" },
-                    { label: "Edge Case Handling", val: (breakdownData.edge_cases || 0) * 10, color: "bg-orange-500" },
-                    { label: "Completeness", val: (breakdownData.completeness || 0) * 10, color: "bg-cyan-500" },
+                    { label: "Passed Assertions", val: tcPassedRate, color: "bg-emerald-500" },
+                    { label: "Failed Assertions", val: tcFailedRate, color: "bg-red-500" },
+                    { label: "Skipped / Not Evaluated", val: tcNotEvaluatedRate, color: "bg-gray-400" },
+                    { label: "Points Awarded", val: scorePercent, color: "bg-blue-500" },
                   ]).map((m, i) => (
                     <div key={i}>
                       <div className="flex justify-between text-sm mb-1.5">
@@ -398,7 +391,7 @@ export function ReportPage() {
               </div>
               <div className={`mt-auto ${gradeBg} p-4 px-6 border-t ${gradeBorder} flex items-center justify-between transition-colors`}>
                 <div className={`flex items-center gap-2 ${gradeColor} font-semibold`}>
-                  <Sparkles className="w-5 h-5" /> Overall AI Grade
+                  <Sparkles className="w-5 h-5" /> Overall Score
                 </div>
                 <div className={`text-xl font-bold ${gradeColor}`}>{gradeBand} <span className="text-sm opacity-70 ml-2 font-normal">({score} / {maxScore})</span></div>
               </div>
@@ -421,7 +414,7 @@ export function ReportPage() {
                   </svg>
                   <div className="absolute inset-0 flex flex-col items-center justify-center">
                     <span className="text-3xl font-bold text-gray-900 leading-none">{tcTotal}</span>
-                    <span className="text-[9px] font-semibold text-gray-500 leading-tight">Total Test Cases</span>
+                    <span className="text-[9px] font-semibold text-gray-500 leading-tight">Total Assertions</span>
                   </div>
                 </div>
 
@@ -447,7 +440,7 @@ export function ReportPage() {
                 </div>
                 <div className="pl-8">
                   <h4 className="font-bold text-gray-900 text-sm mb-1">Evaluation Methodology</h4>
-                  <p className="text-xs text-gray-500 leading-relaxed mb-3">AI-generated test cases are created to cover standard, edge, and hidden scenarios. The candidate's output is verified using an LLM to ensure semantic correctness and logical accuracy.</p>
+                  <p className="text-xs text-gray-500 leading-relaxed mb-3">AI creates structured assertions before publishing. Playwright alone executes them, compares browser values, and awards points.</p>
                   {/* View Methodology button removed — follow-up ticket for static docs page */}
                 </div>
               </div>
@@ -461,7 +454,7 @@ export function ReportPage() {
           <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-6 h-full flex flex-col">
             <div className="flex items-center gap-2 mb-6">
               <Sparkles className="w-5 h-5 text-blue-600" />
-              <h2 className="text-lg font-bold text-gray-900">AI Feedback & Analysis</h2>
+              <h2 className="text-lg font-bold text-gray-900">Recruiter Summary</h2>
             </div>
 
             <div className="bg-[#F0F9FF] rounded-lg p-4 border border-[#E0F2FE] relative mb-6">
@@ -490,29 +483,41 @@ export function ReportPage() {
 
             <div className="mb-6">
               <h4 className="font-bold text-green-700 text-sm flex items-center gap-2 mb-3">
-                <CheckCircle2 className="w-4 h-4" /> Strengths
+                <CheckCircle2 className="w-4 h-4" /> Passing Evidence
               </h4>
               <ul className="space-y-2.5">
-                {(breakdownData?.strengths?.length ? breakdownData.strengths : ["No specific strengths recorded"]).map((s: string, i: number) => (
+                {(breakdownData?.assertions || []).filter((a: any) => a.status === "pass").slice(0, 3).map((s: any, i: number) => (
                   <li key={i} className="flex gap-2 text-sm text-gray-600 items-start">
                     <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
-                    <span className="leading-tight">{s}</span>
+                    <span className="leading-tight">{s.message || `Assertion ${s.assertion_id} passed`}</span>
                   </li>
                 ))}
+                {!(breakdownData?.assertions || []).some((a: any) => a.status === "pass") && (
+                  <li className="flex gap-2 text-sm text-gray-600 items-start">
+                    <CheckCircle2 className="w-4 h-4 text-green-500 shrink-0 mt-0.5" />
+                    <span className="leading-tight">No passing assertions recorded</span>
+                  </li>
+                )}
               </ul>
             </div>
 
             <div className="mb-auto">
               <h4 className="font-bold text-red-600 text-sm flex items-center gap-2 mb-3">
-                <AlertCircle className="w-4 h-4" /> Areas for Improvement
+                <AlertCircle className="w-4 h-4" /> Failed / Blocked Evidence
               </h4>
               <ul className="space-y-2.5">
-                {(breakdownData?.improvements?.length ? breakdownData.improvements : ["No specific areas for improvement recorded"]).map((s: string, i: number) => (
+                {(breakdownData?.assertions || []).filter((a: any) => a.status !== "pass").slice(0, 3).map((s: any, i: number) => (
                   <li key={i} className="flex gap-2 text-sm text-gray-600 items-start">
                     <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
-                    <span className="leading-tight">{s}</span>
+                    <span className="leading-tight">{s.message || `Assertion ${s.assertion_id} did not pass`}</span>
                   </li>
                 ))}
+                {!(breakdownData?.assertions || []).some((a: any) => a.status !== "pass") && (
+                  <li className="flex gap-2 text-sm text-gray-600 items-start">
+                    <AlertCircle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                    <span className="leading-tight">No failing assertions recorded</span>
+                  </li>
+                )}
               </ul>
             </div>
 
@@ -522,11 +527,11 @@ export function ReportPage() {
               </div>
               <div className="pl-8">
                 <div className="flex items-center gap-1 mb-1">
-                  <h4 className="font-bold text-gray-900 text-sm">LLM Evaluation Criteria</h4>
+                  <h4 className="font-bold text-gray-900 text-sm">Playwright Evaluation Criteria</h4>
                   <Info className="w-3.5 h-3.5 text-gray-400" />
                 </div>
                 <p className="text-xs text-gray-600 leading-relaxed mb-3">
-                  The solution is evaluated using LLM-based semantic verification, which checks correctness, edge case handling, code quality, and output logic against AI-generated test cases.
+                  The solution is evaluated with exact DOM, text, attribute, style, function, and interaction checks from the published assertion set.
                 </p>
                 {/* Learn More button removed — follow-up ticket for static docs page */}
               </div>

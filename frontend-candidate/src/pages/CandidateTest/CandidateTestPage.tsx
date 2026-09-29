@@ -49,8 +49,8 @@ export function CandidateTestPage() {
       setEvalStep(1);
       const timers = [
         setTimeout(() => setEvalStep(2), 2000), // Code Submitted -> Running Playwright
-        setTimeout(() => setEvalStep(3), 6000), // Running Playwright -> AI Semantic Review
-        setTimeout(() => setEvalStep(4), 10000) // AI Semantic Review -> Finalizing Report
+        setTimeout(() => setEvalStep(3), 6000), // Running Playwright -> collecting evidence
+        setTimeout(() => setEvalStep(4), 10000) // Collecting evidence -> finalizing report
       ];
       return () => timers.forEach(clearTimeout);
     }
@@ -563,13 +563,13 @@ export function CandidateTestPage() {
                 </div>
               </div>
 
-              {/* Step 3: AI Review */}
+              {/* Step 3: Assertion evidence */}
               <div className="relative flex items-center justify-between md:justify-normal md:odd:flex-row-reverse group">
                 <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 border-white shadow shrink-0 md:order-1 md:group-odd:-translate-x-1/2 md:group-even:translate-x-1/2 z-10 transition-colors ${evalStep > 3 ? 'bg-green-500 text-white' : evalStep === 3 ? 'bg-blue-500 text-white animate-pulse' : 'bg-gray-200 text-gray-400'}`}>
                   {evalStep > 3 ? <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7"></path></svg> : evalStep === 3 ? <div className="w-2.5 h-2.5 bg-white rounded-full" /> : <div className="w-2.5 h-2.5 bg-gray-400 rounded-full" />}
                 </div>
                 <div className={`w-[calc(100%-4rem)] md:w-[calc(50%-2.5rem)] bg-white p-3 rounded-lg border shadow-sm transition-all ${evalStep === 3 ? 'border-blue-100 bg-blue-50/30' : evalStep > 3 ? 'border-gray-100' : 'border-transparent opacity-40'}`}>
-                  <p className="font-semibold text-gray-900 text-sm">AI Semantic Review</p>
+                  <p className="font-semibold text-gray-900 text-sm">Collecting Assertion Evidence</p>
                 </div>
               </div>
 

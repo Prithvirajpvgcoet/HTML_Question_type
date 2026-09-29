@@ -1,263 +1,255 @@
+import asyncio
+import json
+import threading
+from pathlib import Path
+
 import pytest
-from playwright.sync_api import sync_playwright
-from services.evaluation_service.evaluator import CandidateEvaluator, Assertion, TriggerType, CheckType
+from types import SimpleNamespace
 
-# ---------------------------------------------------------
-# Golden Suite Data
-# ---------------------------------------------------------
+sync_playwright = pytest.importorskip("playwright.sync_api").sync_playwright
 
-GOLDEN_ASSERTIONS = [
-    # 1. Color matching (Semantic)
-    Assertion(
-        id="a1", trigger=TriggerType.PAGE_LOAD, check_type=CheckType.COMPUTED_STYLE,
-        trigger_selector=None, check_selector="#color-box",
-        property_name="background-color", expected_value="red", points=10
-    ),
-    # 2. Boolean Attribute Logic (Disabled button)
-    Assertion(
-        id="a2", trigger=TriggerType.PAGE_LOAD, check_type=CheckType.ATTRIBUTE,
-        trigger_selector=None, check_selector="#submit-btn",
-        property_name="disabled", expected_value="true", points=10
-    ),
-    # 3. Sequencing / State (Fill input to enable button, then hover)
-    Assertion(
-        id="a3", trigger=TriggerType.INPUT, check_type=CheckType.ATTRIBUTE,
-        trigger_selector="#username", check_selector="#submit-btn", input_value="testuser",
-        property_name="disabled", expected_value="false", points=10,
-        group_id="flow_1", sequence_order=1
-    ),
-    Assertion(
-        id="a4", trigger=TriggerType.HOVER, check_type=CheckType.COMPUTED_STYLE,
-        trigger_selector="#submit-btn", check_selector="#submit-btn",
-        property_name="cursor", expected_value="pointer", points=10,
-        group_id="flow_1", sequence_order=2
-    ),
-]
+from services.evaluation_service.evaluator import (
+    Assertion,
+    CandidateEvaluator,
+    CheckType,
+    Operator,
+    TriggerType,
+)
+from services.evaluation_service.runner import _run_sync_evaluation
 
-PASS_HTML = """
-<div id="color-box"></div>
-<input type="text" id="username" />
-<button id="submit-btn" disabled>Submit</button>
-"""
 
-PASS_CSS = """
-#color-box { background-color: rgb(255, 0, 0); }
-#submit-btn:not([disabled]):hover { cursor: pointer; }
-"""
+GOLDEN_SET_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "golden_set.json"
 
-PASS_JS = """
-document.getElementById("username").addEventListener("input", (e) => {
-    if(e.target.value.length > 0) document.getElementById("submit-btn").disabled = false;
-    else document.getElementById("submit-btn").disabled = true;
-});
-"""
 
-FAIL_HTML = """
-<div id="color-box"></div>
-<input type="text" id="username" />
-<button id="submit-btn">Submit</button> <!-- Bug: Not disabled initially -->
-"""
+def _load_golden_set() -> dict:
+    return json.loads(GOLDEN_SET_PATH.read_text(encoding="utf-8"))
 
-FAIL_CSS = """
-#color-box { background-color: rgb(0, 0, 255); } /* Bug: Wrong color */
-"""
 
-FAIL_JS = """
-// Bug: No logic to enable button or pointer cursor
-"""
+def _golden_assertions() -> list[Assertion]:
+    assertions = []
+    for item in _load_golden_set()["assertions"]:
+        assertions.append(
+            Assertion(
+                id=item["id"],
+                trigger=TriggerType(item["trigger"]),
+                check_type=CheckType(item["check_type"]),
+                trigger_selector=item.get("trigger_selector"),
+                check_selector=item.get("check_selector"),
+                property_name=item.get("property_name"),
+                operator=Operator(item.get("operator", "equals")),
+                expected_value=item.get("expected_value"),
+                input_value=item.get("input_value"),
+                points=item.get("points", 0),
+                group_id=item.get("group_id"),
+                sequence_order=item.get("sequence_order"),
+                execution_mode=item.get("execution_mode", "isolated"),
+                wait_ms=item.get("wait_ms", 0),
+            )
+        )
+    return assertions
 
-# ---------------------------------------------------------
-# Tests
-# ---------------------------------------------------------
+
+GOLDEN_SET = _load_golden_set()
+GOOD_SUBMISSIONS = GOLDEN_SET["good_submissions"]
+BROKEN_SUBMISSIONS = GOLDEN_SET["broken_submissions"]
+
 
 @pytest.fixture(scope="module")
-def browser_context():
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
-        page = context.new_page()
-        yield page
+def page():
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch(headless=True)
+        context = browser.new_context(viewport={"width": 1280, "height": 720}, locale="en-US", timezone_id="UTC")
+        yield context.new_page()
         browser.close()
 
-def test_golden_pass(browser_context):
-    evaluator = CandidateEvaluator(browser_context)
-    result = evaluator.evaluate_submission(PASS_HTML, PASS_CSS, PASS_JS, GOLDEN_ASSERTIONS)
-    
-    assert result.total_points == 40
-    for res in result.assertion_results:
-        assert res.status == "PASS", f"Assertion {res.assertion_id} failed unexpectedly: {res.message}"
 
-def test_golden_fail(browser_context):
-    evaluator = CandidateEvaluator(browser_context)
-    result = evaluator.evaluate_submission(FAIL_HTML, FAIL_CSS, FAIL_JS, GOLDEN_ASSERTIONS)
-    
-    # Expecting failure on:
-    # a1: background-color is blue, expected red -> FAIL
-    # a2: button is not disabled -> FAIL
-    # a3: input triggers nothing, button stays enabled, technically expected_value="false" so actual is "false", wait, if it's already enabled, it might pass? Let's assume some fail.
-    
-    assert result.total_points < 40
-    
-    a1_res = next(r for r in result.assertion_results if r.assertion_id == "a1")
-    assert a1_res.status == "FAIL"
-    
-    a2_res = next(r for r in result.assertion_results if r.assertion_id == "a2")
-    assert a2_res.status == "FAIL"
-
-
-
-from services.evaluation_service.runner import parse_expected_result
-
-@pytest.mark.parametrize("check_type,expected_result,want_prop,want_value", [
-    ("attribute", "type: password", "type", "password"),
-    ("attribute", "value: testuser", "value", "testuser"),
-    ("attribute", "value=secret", "value", "secret"),
-    ("text_content", "text: Log in", None, "Log in"),
-    ("text_content", "content: Welcome", None, "Welcome"),
-    ("computed_style", "background-color: red", "background-color", "red"),
-    ("dom_presence", "element should exist", None, "element should exist")
-])
-def test_parse_expected_result(check_type, expected_result, want_prop, want_value):
-    assert parse_expected_result(check_type, expected_result) == (want_prop, want_value)
-def test_reference_gate_catches_missing_precondition(browser_context):
-    from services.evaluation_service.evaluator import CandidateEvaluator, Assertion, TriggerType, CheckType
-    ref_html = """
-        <input id='username' /><input id='password' type='password' />
-        <button id='loginBtn' disabled>Login</button>
-    """
-    ref_js = """
-        function check() {
-            document.getElementById('loginBtn').disabled =
-                !(document.getElementById('username').value &&
-                  document.getElementById('password').value);
-        }
-        document.getElementById('username').addEventListener('input', check);
-        document.getElementById('password').addEventListener('input', check);
-    """
-    incomplete_assertions = [
-        Assertion(
-            id='x1', trigger=TriggerType.INPUT, check_type=CheckType.ATTRIBUTE,
-            trigger_selector='#username', check_selector='#loginBtn',
-            input_value='alice', property_name='disabled', expected_value='false',
-            points=10, group_id='g1', sequence_order=1
-        ),
-    ]
-    evaluator = CandidateEvaluator(browser_context)
-    result = evaluator.evaluate_submission(ref_html, '', ref_js, incomplete_assertions)
-    assert result.total_points == 0, 'Reference solution must fail an incomplete precondition assertion.'
-
-def test_multifield_precondition_correct_set_passes(browser_context):
-    from services.evaluation_service.evaluator import CandidateEvaluator, Assertion, TriggerType, CheckType
-    ref_html = """
-        <input id='username' /><input id='password' type='password' />
-        <button id='loginBtn' disabled>Login</button>
-    """
-    ref_js = """
-        function check() {
-            document.getElementById('loginBtn').disabled =
-                !(document.getElementById('username').value &&
-                  document.getElementById('password').value);
-        }
-        document.getElementById('username').addEventListener('input', check);
-        document.getElementById('password').addEventListener('input', check);
-    """
-    complete_assertions = [
-        Assertion(
-            id='c1', trigger=TriggerType.INPUT, check_type=CheckType.DOM_PRESENCE,
-            trigger_selector='#username', check_selector='#username',
-            input_value='alice', expected_value='true', points=5,
-            group_id='g1', sequence_order=1
-        ),
-        Assertion(
-            id='c2', trigger=TriggerType.INPUT, check_type=CheckType.ATTRIBUTE,
-            trigger_selector='#password', check_selector='#loginBtn',
-            input_value='secret', property_name='disabled', expected_value='false',
-            points=10, group_id='g1', sequence_order=2
-        ),
-    ]
-    evaluator = CandidateEvaluator(browser_context)
-    result = evaluator.evaluate_submission(ref_html, '', ref_js, complete_assertions)
-    assert result.total_points == 15
-
-def test_execution_mode_isolation(browser_context):
-    html = '''
-        <button id="toggleBtn">Off</button>
-    '''
-    js = '''
-        const btn = document.getElementById('toggleBtn');
-        btn.addEventListener('click', () => {
-            btn.textContent = btn.textContent === 'Off' ? 'On' : 'Off';
-        });
-    '''
-    
-    # We want three assertions:
-    # 1. Click toggle, check text is 'On' (sequential, group 'g1', order 1)
-    # 2. Page load, check text is 'Off' (isolated) - shouldn't see the click from 1
-    # 3. Click toggle, check text is 'Off' (sequential, group 'g1', order 2) - should see the click from 1
-    
+def test_supported_checks_and_exact_equals(page):
+    evaluator = CandidateEvaluator(page)
     assertions = [
-        Assertion(
-            id='a1', trigger=TriggerType.CLICK, trigger_selector='#toggleBtn',
-            check_type=CheckType.TEXT_CONTENT, check_selector='#toggleBtn',
-            expected_value='On', points=10, group_id='g1', sequence_order=1, execution_mode='sequential'
-        ),
-        Assertion(
-            id='a2', trigger=TriggerType.PAGE_LOAD, trigger_selector='',
-            check_type=CheckType.TEXT_CONTENT, check_selector='#toggleBtn',
-            expected_value='Off', points=10, group_id=None, sequence_order=None, execution_mode='isolated'
-        ),
-        Assertion(
-            id='a3', trigger=TriggerType.CLICK, trigger_selector='#toggleBtn',
-            check_type=CheckType.TEXT_CONTENT, check_selector='#toggleBtn',
-            expected_value='Off', points=10, group_id='g1', sequence_order=2, execution_mode='sequential'
-        )
+        Assertion("presence", TriggerType.PAGE_LOAD, CheckType.DOM_PRESENCE, check_selector="#count", operator=Operator.EXISTS, points=10),
+        Assertion("absence", TriggerType.PAGE_LOAD, CheckType.DOM_ABSENCE, check_selector="#missing", operator=Operator.NOT_EXISTS, points=10),
+        Assertion("count", TriggerType.PAGE_LOAD, CheckType.ELEMENT_COUNT, check_selector=".item", expected_value="2", points=10),
+        Assertion("text", TriggerType.PAGE_LOAD, CheckType.TEXT_CONTENT, check_selector="#count", expected_value="1", points=10),
+        Assertion("attr", TriggerType.PAGE_LOAD, CheckType.ATTRIBUTE, check_selector="#field", property_name="type", expected_value="password", points=10),
+        Assertion("style", TriggerType.PAGE_LOAD, CheckType.COMPUTED_STYLE, check_selector="#count", property_name="color", expected_value="rgb(255, 0, 0)", points=10),
     ]
-    
-    evaluator = CandidateEvaluator(browser_context)
-    result = evaluator.evaluate_submission(html, '', js, assertions)
-    assert result.total_points == 30
-def test_dom_presence_expectation(browser_context):
-    html = '''
-        <div id="exists">I exist</div>
-    '''
-    js = ''
-    
+    result = evaluator.evaluate_submission(
+        '<span class="item"></span><span class="item"></span><strong id="count">1</strong><input id="field" type="password">',
+        "#count { color: red; }", "", assertions,
+    )
+    assert result.total_points == 60
+
+    assertions[3].expected_value = "10"
+    result = evaluator.evaluate_submission('<strong id="count">1</strong>', "", "", [assertions[3]])
+    assert result.total_points == 0
+
+
+def test_sequential_failure_blocks_later_steps(page):
+    evaluator = CandidateEvaluator(page)
     assertions = [
-        # Expected Present, Element Exists -> PASS
-        Assertion(
-            id='a1', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
-            trigger_selector='', check_selector='#exists',
-            expected_value='present', points=10, group_id='g1', execution_mode='isolated'
-        ),
-        # Expected Present, Element Missing -> FAIL
-        Assertion(
-            id='a2', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
-            trigger_selector='', check_selector='#missing',
-            expected_value='present', points=10, group_id='g2', execution_mode='isolated'
-        ),
-        # Expected Absent, Element Missing -> PASS
-        Assertion(
-            id='a3', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
-            trigger_selector='', check_selector='#missing',
-            expected_value='absent', points=10, group_id='g3', execution_mode='isolated'
-        ),
-        # Expected Absent, Element Exists -> FAIL
-        Assertion(
-            id='a4', trigger=TriggerType.PAGE_LOAD, check_type=CheckType.DOM_PRESENCE,
-            trigger_selector='', check_selector='#exists',
-            expected_value='absent', points=10, group_id='g4', execution_mode='isolated'
-        )
+        Assertion("1", TriggerType.CLICK, CheckType.TEXT_CONTENT, "#missing", "#count", expected_value="1", points=10,
+                  group_id="counter", sequence_order=1, execution_mode="sequential"),
+        Assertion("2", TriggerType.CLICK, CheckType.TEXT_CONTENT, "#increment", "#count", expected_value="2", points=10,
+                  group_id="counter", sequence_order=2, execution_mode="sequential"),
     ]
-    
-    evaluator = CandidateEvaluator(browser_context)
-    result = evaluator.evaluate_submission(html, '', js, assertions)
-    
-    # We should have 20 points (10 for a1, 10 for a3)
-    assert result.total_points == 20
-    
-    # Let's also check the exact statuses
-    status_map = {ar.assertion_id: ar.status for ar in result.assertion_results}
-    assert status_map['a1'] == 'PASS'
-    assert status_map['a2'] == 'FAIL'
-    assert status_map['a3'] == 'PASS'
-    assert status_map['a4'] == 'FAIL'
+    result = evaluator.evaluate_submission('<button id="increment"></button><span id="count">0</span>', "", "", assertions)
+    assert result.assertion_results[0].status == "FAIL"
+    assert result.assertion_results[1].status == "SKIPPED"
+    assert result.assertion_results[1].blocked_by == "1"
+
+
+def test_call_function_and_function_presence(page):
+    evaluator = CandidateEvaluator(page)
+    js = "function setProgress(value) { document.querySelector('#progress').textContent = value + '%'; }"
+    assertions = [
+        Assertion("fn", TriggerType.PAGE_LOAD, CheckType.FUNCTION_PRESENCE, check_selector="setProgress",
+                  operator=Operator.EXISTS, points=10),
+        Assertion("call", TriggerType.CALL_FUNCTION, CheckType.TEXT_CONTENT, trigger_selector="setProgress",
+                  input_value="[50]", check_selector="#progress", expected_value="50%", points=10),
+    ]
+    result = evaluator.evaluate_submission('<div id="progress">0%</div>', "", js, assertions)
+    assert [item.status for item in result.assertion_results] == ["PASS", "PASS"]
+
+
+def test_capture_mode_returns_browser_value_without_scoring(page):
+    evaluator = CandidateEvaluator(page)
+    assertion = Assertion("capture", TriggerType.PAGE_LOAD, CheckType.TEXT_CONTENT, check_selector="#value", points=10)
+    result = evaluator.evaluate_submission('<div id="value">browser canonical value</div>', "", "", [assertion], capture_only=True)
+    assert result.total_points == 0
+    assert result.assertion_results[0].actual == "browser canonical value"
+
+
+def test_process_runner_returns_assertion_evidence():
+    from services.evaluation_service.runner import _run_with_hard_timeout
+
+    results = _run_with_hard_timeout(
+        '<div id="value">1</div>', "", "",
+        [{
+            "id": "exact", "trigger": "page_load", "check_type": "text_content",
+            "check_selector": "#value", "operator": "equals", "expected_value": "1",
+            "points": 10, "execution_mode": "isolated",
+        }],
+        False,
+    )
+    assert results[0] == {
+        "assertion_id": "exact", "status": "pass", "passed": True,
+        "actual_value": "1", "expected_value": "1", "error": "",
+        "reason": None, "blocked_by": None, "points_awarded": 10,
+    }
+
+
+def test_runner_does_not_disable_web_security(monkeypatch):
+    launch_args = {}
+
+    class FakeBrowser:
+        def new_context(self, **kwargs):
+            raise RuntimeError("stop after launch")
+
+        def close(self):
+            pass
+
+    class FakeChromium:
+        def launch(self, **kwargs):
+            launch_args.update(kwargs)
+            return FakeBrowser()
+
+    class FakePlaywright:
+        chromium = FakeChromium()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr("services.evaluation_service.runner.sync_playwright", lambda: FakePlaywright())
+    with pytest.raises(RuntimeError, match="stop after launch"):
+        _run_sync_evaluation("", "", "", [], False)
+    assert "--disable-web-security" not in launch_args["args"]
+
+
+def test_reference_validation_rejects_assertions_that_empty_submission_can_score(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost/test")
+    monkeypatch.setenv("DATABASE_URL_SYNC", "postgresql://test:test@localhost/test")
+    monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/0")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+
+    from api.v1.questions import crud
+
+    async def fake_evaluate_submission(html, css, js, assertions, capture_only=False):
+        if capture_only:
+            return [
+                {"assertion_id": "presence", "passed": True, "actual_value": "Ready"},
+                {"assertion_id": "absence", "passed": True, "actual_value": True},
+            ]
+        return [
+            {"assertion_id": "presence", "points_awarded": 0},
+            {"assertion_id": "absence", "points_awarded": 50},
+        ]
+
+    class FakeDb:
+        async def commit(self):
+            pass
+
+        async def refresh(self, _):
+            pass
+
+    q = SimpleNamespace(id="question-1", reference_html="<div id='status'>Ready</div>", reference_css="", reference_js="")
+    assertions = [
+        SimpleNamespace(id="presence", operator="equals", expected_value=None, points=50),
+        SimpleNamespace(id="absence", operator="not_exists", expected_value=None, points=50),
+    ]
+    monkeypatch.setattr(crud, "evaluate_submission", fake_evaluate_submission)
+
+    outcome = {}
+
+    def run_validation():
+        try:
+            outcome["value"] = asyncio.run(crud._validate_against_reference(q, assertions, FakeDb()))
+        except BaseException as exc:
+            outcome["error"] = exc
+
+    thread = threading.Thread(target=run_validation)
+    thread.start()
+    thread.join()
+    if "error" in outcome:
+        raise outcome["error"]
+    split = outcome["value"]
+
+    assert len(split["failed"]) == 2
+    assert {item.id for item in split["failed"]} == {"presence", "absence"}
+    assert all("empty submission scored 50.0%" in item.last_validation_error for item in split["failed"])
+
+
+def test_golden_set_fixture_shape():
+    assert GOLDEN_SET_PATH.exists()
+    assert len(GOOD_SUBMISSIONS) == 10
+    assert len(BROKEN_SUBMISSIONS) == 3
+    assert sum(item["points"] for item in GOLDEN_SET["assertions"]) == 100
+    assert {item["name"] for item in GOOD_SUBMISSIONS}.isdisjoint(
+        {item["name"] for item in BROKEN_SUBMISSIONS}
+    )
+
+
+@pytest.mark.parametrize("submission", GOOD_SUBMISSIONS, ids=[item["name"] for item in GOOD_SUBMISSIONS])
+def test_golden_set_good_submissions(page, submission):
+    evaluator = CandidateEvaluator(page)
+    result = evaluator.evaluate_submission(
+        submission["html"],
+        submission["css"],
+        submission["js"],
+        _golden_assertions(),
+    )
+    assert result.total_points == 100, submission["name"]
+
+
+@pytest.mark.parametrize("submission", BROKEN_SUBMISSIONS, ids=[item["name"] for item in BROKEN_SUBMISSIONS])
+def test_golden_set_broken_submissions(page, submission):
+    evaluator = CandidateEvaluator(page)
+    result = evaluator.evaluate_submission(
+        submission["html"],
+        submission["css"],
+        submission["js"],
+        _golden_assertions(),
+    )
+    assert result.total_points < 100, submission["name"]

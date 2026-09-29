@@ -158,7 +158,7 @@ export function QuestionPreviewPage() {
                 <span className="font-bold">Note</span>
                 <div className="mt-0.5 text-red-700">
                   Write valid HTML, CSS, and JavaScript. Your solution will be automatically evaluated
-                  using visual assertions and AI semantic review. Ensure your code runs without errors.
+                  using deterministic Playwright assertions. Ensure your code runs without errors.
                 </div>
               </div>
             </div>

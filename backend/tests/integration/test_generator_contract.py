@@ -1,64 +1,87 @@
-﻿import pytest
 import asyncio
-from services.assertion_service.generator import generate_assertions_from_llm
-from services.evaluation_service.runner import parse_expected_result
 
-Q1 = {
-    "title": "Login Form",
-    "description": "Create a login form. When username and password are provided, enable the submit button. The submit button should have text 'Log in'. Password field should have type password.",
-    "html": "<input id='username' /><input id='password' type='password' /><button id='submit' disabled>Log in</button>",
-    "css": "",
-    "js": ""
-}
+import pytest
+from pydantic import ValidationError
 
-Q2 = {
-    "title": "Hover Card",
-    "description": "A card that turns red on hover.",
-    "html": "<div id='card'>Hover me</div>",
-    "css": "#card:hover { background-color: red; }",
-    "js": ""
-}
+from services.assertion_service.generator import LLMAssertion, _validate_selector_tokens
 
-Q3 = {
-    "title": "Counter",
-    "description": "A counter with a button that increments the text content.",
-    "html": "<button id='increment'>0</button>",
-    "css": "",
-    "js": "document.getElementById('increment').onclick = function() { this.innerText = parseInt(this.innerText) + 1; }"
-}
 
-Q4 = {
-    "title": "Dynamic Checkbox",
-    "description": "A checkbox that when checked, adds a checked attribute.",
-    "html": "<input type='checkbox' id='chk' />",
-    "css": "",
-    "js": ""
-}
+def test_structured_assertion_contract_accepts_supported_values():
+    assertion = LLMAssertion.model_validate({
+        "order": 1,
+        "group_id": "counter",
+        "execution_mode": "sequential",
+        "trigger": "click",
+        "trigger_selector": "#increment",
+        "input_value": None,
+        "check_type": "text_content",
+        "check_selector": "#count",
+        "property_name": None,
+        "operator": "equals",
+        "expected_value": None,
+        "points": 10,
+        "is_sample": False,
+        "wait_ms": 0,
+        "sequence_order": 1,
+    })
+    assert assertion.check_type == "text_content"
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("q", [Q1, Q2, Q3, Q4])
-async def test_generator_parser_contract(q):
-    assertions = await generate_assertions_from_llm(
-        title=q["title"],
-        description=q["description"],
-        html=q["html"],
-        css=q["css"],
-        js=q["js"]
-    )
-    
-    assert len(assertions) > 0, "Should generate at least some assertions"
-    
-    for a in assertions:
-        check_type = a.get("check_type")
-        expected = a.get("expected_result", "")
-        
-        prop, val = parse_expected_result(check_type, expected)
-        
-        if check_type in ("computed_style", "attribute"):
-            # Should successfully extract a property name
-            assert prop is not None, f"Parser failed to extract property from {check_type}: '{expected}'"
-        elif check_type == "text_content":
-            # For text_content, prop is stripped and None is returned
-            # Ensure it didn't just fall back to raw if it had a 'text:' prefix
-            if "text:" in expected.lower() or "content:" in expected.lower():
-                assert val != expected, f"Parser failed to strip prefix from {check_type}: '{expected}'"
+
+def test_contract_rejects_visual_and_free_text_fields():
+    with pytest.raises(ValidationError):
+        LLMAssertion.model_validate({
+            "order": 1,
+            "execution_mode": "isolated",
+            "trigger": "page_load",
+            "check_type": "visual_region",
+            "check_selector": "#card",
+            "operator": "equals",
+            "expected_result": "looks good",
+        })
+
+
+def test_selector_guard_rejects_invented_id():
+    with pytest.raises(ValueError, match="not explicitly named"):
+        _validate_selector_tokens(
+            [{"trigger": "click", "trigger_selector": "#invented", "check_type": "text_content", "check_selector": "#count"}],
+            "Click #increment and update #count.",
+            '<button id="increment"></button><span id="count"></span>',
+        )
+
+
+def test_selector_guard_rejects_reference_only_hidden_id():
+    with pytest.raises(ValueError, match="not explicitly named"):
+        _validate_selector_tokens(
+            [{"trigger": "page_load", "check_type": "text_content", "check_selector": "#secret"}],
+            "Show the required message.",
+            '<span id="secret">Done</span>',
+        )
+
+
+def test_generation_validation_rejects_hidden_selector_contract(monkeypatch):
+    from services.assertion_service import generator
+
+    async def fake_call_llm_structured(**kwargs):
+        assert "EXPLICIT_SELECTOR_CONTRACT" in kwargs["system_prompt"]
+        return {
+            "status": "failed",
+            "issues": [
+                {
+                    "type": "hidden_selector_contract",
+                    "message": "Reference uses #secret but the question never names it.",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(generator, "call_llm_structured", fake_call_llm_structured)
+
+    with pytest.raises(ValueError, match="hidden_selector_contract"):
+        asyncio.run(
+            generator.validate_question_for_generation(
+                "Hidden selector",
+                "Show the required message.",
+                '<span id="secret">Done</span>',
+                "",
+                "",
+            )
+        )

@@ -1,8 +1,9 @@
 import json
 import asyncio
 import logging
+import re
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy import delete as sa_delete, text
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 MAX_REPAIR_ROUNDS = 2  # after this many auto-repair attempts, stop and force manual edit
+EMPTY_SUBMISSION_MAX_SCORE_PCT = 20
 
 
 # ---------------------------------------------------------------------------
@@ -35,7 +37,10 @@ def _serialize_assertion(a: Assertion) -> dict:
         "trigger_selector": a.trigger_selector,
         "check_selector": a.check_selector,
         "check_type": a.check_type.value if hasattr(a.check_type, "value") else a.check_type,
-        "expected_result": a.expected_result,
+        "input_value": a.input_value,
+        "property_name": a.property_name,
+        "operator": a.operator.value if hasattr(a.operator, "value") else a.operator,
+        "expected_value": a.expected_value,
         "points": a.points,
         "is_sample": a.is_sample,
         "execution_mode": a.execution_mode.value if hasattr(a.execution_mode, "value") else a.execution_mode,
@@ -57,28 +62,102 @@ async def _validate_against_reference(
     Writes last_validation_status / last_validation_error on every row.
     Returns {"passed": [...], "failed": [...]} — never raises.
     """
-    results = await evaluate_submission(
+    run_one = await evaluate_submission(
         html=q.reference_html or "",
         css=q.reference_css or "",
         js=q.reference_js or "",
         assertions=saved_assertions,
+        capture_only=True,
     )
-    results_by_id = {r["assertion_id"]: r for r in results}
+    run_two = await evaluate_submission(
+        html=q.reference_html or "",
+        css=q.reference_css or "",
+        js=q.reference_js or "",
+        assertions=saved_assertions,
+        capture_only=True,
+    )
+    first = {r["assertion_id"]: r for r in run_one}
+    second = {r["assertion_id"]: r for r in run_two}
 
     passed, failed = [], []
     for a in saved_assertions:
-        r = results_by_id.get(a.id)
-        if r and r["passed"]:
+        r1, r2 = first.get(a.id), second.get(a.id)
+        stable = bool(
+            r1 and r2 and r1["passed"] and r2["passed"]
+            and r1.get("actual_value") == r2.get("actual_value")
+        )
+        actual = r1.get("actual_value") if r1 else None
+        operator = a.operator.value if hasattr(a.operator, "value") else str(a.operator)
+        if stable and operator == "equals":
+            a.expected_value = actual
+        elif stable and operator == "contains":
+            stable = str(a.expected_value or "") in str(actual or "")
+        elif stable and operator == "regex":
+            try:
+                stable = re.search(str(a.expected_value or ""), str(actual or "")) is not None
+            except re.error:
+                stable = False
+        elif stable and operator == "exists":
+            stable = actual not in (None, "False", False)
+        elif stable and operator == "not_exists":
+            stable = actual in ("True", True)
+
+        if stable:
             a.last_validation_status = "passed"
             a.last_validation_error = None
             passed.append(a)
         else:
-            a.last_validation_status = "failed"
-            a.last_validation_error = (r or {}).get("error", "")
+            values_differ = bool(r1 and r2 and r1.get("actual_value") != r2.get("actual_value"))
+            a.last_validation_status = "flaky" if values_differ else "failed"
+            a.last_validation_error = (
+                f"Unstable reference values: {r1.get('actual_value')!r} then {r2.get('actual_value')!r}"
+                if values_differ else (r1 or r2 or {}).get("error", "Reference assertion did not pass")
+            )
             failed.append(a)
 
+    empty_run = []
+    empty_score_pct = 0.0
+    if saved_assertions and not failed:
+        empty_run = await evaluate_submission(
+            html="",
+            css="",
+            js="",
+            assertions=saved_assertions,
+            capture_only=False,
+        )
+        max_points = sum(int(getattr(item, "points", 0) or 0) for item in saved_assertions)
+        empty_points = sum(int(item.get("points_awarded") or 0) for item in empty_run)
+        empty_score_pct = round((empty_points / max_points) * 100, 1) if max_points else 0.0
+        if empty_score_pct > EMPTY_SUBMISSION_MAX_SCORE_PCT:
+            false_positive_ids = {
+                item.get("assertion_id")
+                for item in empty_run
+                if int(item.get("points_awarded") or 0) > 0
+            }
+            sanity_error = (
+                f"Negative sanity check failed: an empty submission scored "
+                f"{empty_score_pct}% against this assertion set."
+            )
+            failed = []
+            passed = []
+            for a in saved_assertions:
+                a.last_validation_status = "failed"
+                a.last_validation_error = (
+                    sanity_error if a.id in false_positive_ids
+                    else f"{sanity_error} Review the full assertion set; this assertion was not individually awarded points."
+                )
+                failed.append(a)
+
     q.validation_status = ValidationStatus.passed if not failed else ValidationStatus.failed
-    q.last_validation_results = json.dumps(results)
+    q.last_validation_results = json.dumps({
+        "run_1": run_one,
+        "run_2": run_two,
+        "negative_sanity": {
+            "threshold_pct": EMPTY_SUBMISSION_MAX_SCORE_PCT,
+            "score_pct": empty_score_pct,
+            "results": empty_run,
+        },
+    })
     await db.commit()
     for a in saved_assertions:
         await db.refresh(a)
@@ -106,7 +185,10 @@ async def _save_new_assertions(
             trigger_selector=raw.get("trigger_selector", ""),
             check_selector=raw.get("check_selector", ""),
             check_type=raw.get("check_type", "dom_presence"),
-            expected_result=raw.get("expected_result", ""),
+            input_value=raw.get("input_value"),
+            property_name=raw.get("property_name"),
+            operator=raw.get("operator", "equals"),
+            expected_value=raw.get("expected_value"),
             points=raw.get("points", 10),
             wait_ms=raw.get("wait_ms", 300),
             is_sample=raw.get("is_sample", False),
@@ -212,6 +294,9 @@ async def _run_generation_job(
                         title=q.title,
                         description=q.description_html,
                         existing_assertions=keep_dicts or [],
+                        html=q.reference_html or "",
+                        css=q.reference_css or "",
+                        js=q.reference_js or "",
                     ),
                     timeout=90.0,
                 )
@@ -238,6 +323,10 @@ async def _run_generation_job(
             order_offset = len(keep_assertions_db)
             new_rows = await _save_new_assertions(q, raw, order_offset, db)
             all_assertions = keep_assertions_db + new_rows
+            if all_assertions:
+                base_points, remainder = divmod(100, len(all_assertions))
+                for index, assertion in enumerate(all_assertions):
+                    assertion.points = base_points + (1 if index < remainder else 0)
 
             split = await _validate_against_reference(q, all_assertions, db)
 
@@ -296,23 +385,37 @@ class RepairAssertionsReq(BaseModel):
 
 
 class CreateAssertionReq(BaseModel):
-    trigger: str = "page_load"
-    trigger_selector: str
+    trigger: Literal["page_load", "click", "input", "change", "hover", "call_function"] = "page_load"
+    trigger_selector: Optional[str] = None
+    input_value: Optional[str] = None
     check_selector: str
-    check_type: str = "dom_presence"
-    expected_result: str = ""
+    check_type: Literal["dom_presence", "dom_absence", "element_count", "text_content", "attribute", "computed_style", "function_presence"] = "dom_presence"
+    property_name: Optional[str] = None
+    operator: Literal["equals", "contains", "regex", "exists", "not_exists"] = "equals"
+    expected_value: Optional[str] = None
     points: int = 10
     is_sample: bool = False
+    execution_mode: Literal["isolated", "sequential"] = "isolated"
+    group_id: Optional[str] = None
+    sequence_order: Optional[int] = None
+    wait_ms: int = 0
 
 
 class UpdateAssertionReq(BaseModel):
-    trigger: Optional[str] = None
+    trigger: Optional[Literal["page_load", "click", "input", "change", "hover", "call_function"]] = None
     trigger_selector: Optional[str] = None
+    input_value: Optional[str] = None
     check_selector: Optional[str] = None
-    check_type: Optional[str] = None
-    expected_result: Optional[str] = None
+    check_type: Optional[Literal["dom_presence", "dom_absence", "element_count", "text_content", "attribute", "computed_style", "function_presence"]] = None
+    property_name: Optional[str] = None
+    operator: Optional[Literal["equals", "contains", "regex", "exists", "not_exists"]] = None
+    expected_value: Optional[str] = None
     points: Optional[int] = None
     is_sample: Optional[bool] = None
+    execution_mode: Optional[Literal["isolated", "sequential"]] = None
+    group_id: Optional[str] = None
+    sequence_order: Optional[int] = None
+    wait_ms: Optional[int] = None
 
 
 # ---------------------------------------------------------------------------
@@ -668,11 +771,18 @@ async def create_assertion(
         order=order,
         trigger=req.trigger,
         trigger_selector=req.trigger_selector,
+        input_value=req.input_value,
         check_selector=req.check_selector,
         check_type=req.check_type,
-        expected_result=req.expected_result,
+        property_name=req.property_name,
+        operator=req.operator,
+        expected_value=req.expected_value,
         points=req.points,
         is_sample=req.is_sample,
+        execution_mode=req.execution_mode,
+        group_id=req.group_id,
+        sequence_order=req.sequence_order,
+        wait_ms=req.wait_ms,
         source="author_added",
     )
     db.add(new_a)
@@ -739,7 +849,7 @@ async def generate_edge_cases(
     active = await db.execute(
         select(AssertionGenerationJob).where(
             AssertionGenerationJob.question_id == question_id,
-            AssertionGenerationJob.status.in_([JobStatus.pending, JobStatus.analyzing, JobStatus.validating]),
+            AssertionGenerationJob.status.in_([JobStatus.queued, JobStatus.analyzing, JobStatus.validating]),
         )
     )
     if active.scalar_one_or_none():
@@ -750,7 +860,7 @@ async def generate_edge_cases(
         question_id=question_id,
         mode="edge_cases",
         target_count=2,  # The edge cases prompt asks for 2
-        status=JobStatus.pending,
+        status=JobStatus.queued,
     )
     db.add(job)
     await db.commit()
@@ -839,10 +949,17 @@ async def import_question(data: dict, db: AsyncSession = Depends(get_db)):
                 order=i,
                 trigger=a.get("trigger", "page_load"),
                 trigger_selector=a.get("trigger_selector", ""),
+                input_value=a.get("input_value"),
                 check_selector=a.get("check_selector", ""),
                 check_type=a.get("check_type", "dom_presence"),
-                expected_result=a.get("expected_result", ""),
+                property_name=a.get("property_name"),
+                operator=a.get("operator", "equals"),
+                expected_value=a.get("expected_value"),
                 points=a.get("points", 5),
+                execution_mode=a.get("execution_mode", "isolated"),
+                group_id=a.get("group_id"),
+                sequence_order=a.get("sequence_order"),
+                wait_ms=a.get("wait_ms", 0),
             )
         )
     await db.commit()

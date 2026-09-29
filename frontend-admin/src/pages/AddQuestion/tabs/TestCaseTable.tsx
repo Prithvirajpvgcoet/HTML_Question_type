@@ -6,7 +6,10 @@ type Assertion = {
   trigger_selector: string | null;
   check_selector: string | null;
   check_type: string;
-  expected_result: string;
+  input_value?: string;
+  property_name?: string;
+  operator: string;
+  expected_value?: string;
   points: number;
   is_sample: boolean;
   execution_mode?: string;
@@ -35,6 +38,7 @@ function describeTrigger(a: Assertion): string {
     hover: `Hover ${a.trigger_selector}`,
     input: `Type into ${a.trigger_selector}`,
     change: `Change ${a.trigger_selector}`,
+    call_function: `Call ${a.trigger_selector}(${a.input_value || "[]"})`,
   };
   return map[a.trigger] ?? a.trigger;
 }
@@ -42,6 +46,8 @@ function describeTrigger(a: Assertion): string {
 function describeCheck(a: Assertion): string {
   const map: Record<string, string> = {
     dom_presence: `${a.check_selector} exists`,
+    dom_absence: `${a.check_selector} does not exist`,
+    element_count: `${a.check_selector} count`,
     computed_style: `${a.check_selector} (style)`,
     attribute: `${a.check_selector} (attribute)`,
     text_content: `${a.check_selector} text`,
@@ -149,7 +155,8 @@ export function TestCaseTable({ assertions, results }: Props) {
               <div>
                 <div className="font-semibold text-gray-700 text-sm mb-1 uppercase tracking-wide">Expected Output</div>
                 <div className="text-gray-800 bg-blue-50 p-3 rounded text-sm font-mono border border-blue-100 whitespace-pre-wrap">
-                  {selectedAssertion.expected_result}
+                  {selectedAssertion.property_name ? `${selectedAssertion.property_name} ` : ""}
+                  {selectedAssertion.operator} {selectedAssertion.expected_value ?? ""}
                 </div>
               </div>
 

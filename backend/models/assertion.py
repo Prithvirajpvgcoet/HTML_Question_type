@@ -14,14 +14,25 @@ class TriggerType(str, enum.Enum):
     change = "change"
     input = "input"
     hover = "hover"
+    call_function = "call_function"
 
 
 class CheckType(str, enum.Enum):
     dom_presence = "dom_presence"
+    dom_absence = "dom_absence"
+    element_count = "element_count"
     computed_style = "computed_style"
     text_content = "text_content"
     attribute = "attribute"
-    visual_region = "visual_region"
+    function_presence = "function_presence"
+
+
+class AssertionOperator(str, enum.Enum):
+    equals = "equals"
+    contains = "contains"
+    regex = "regex"
+    exists = "exists"
+    not_exists = "not_exists"
 
 
 class ExecutionMode(str, enum.Enum):
@@ -50,14 +61,19 @@ class Assertion(Base):
     check_selector: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     wait_ms: Mapped[int] = mapped_column(Integer, default=300)
     check_type: Mapped[CheckType] = mapped_column(SAEnum(CheckType))
-    expected_result: Mapped[str] = mapped_column(Text)
+    property_name: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    operator: Mapped[AssertionOperator] = mapped_column(
+        SAEnum(AssertionOperator), default=AssertionOperator.equals
+    )
+    expected_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    input_value: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     points: Mapped[int] = mapped_column(Integer, default=10)
     is_sample: Mapped[bool] = mapped_column(Boolean, default=False)
     source: Mapped[AssertionSource] = mapped_column(
         SAEnum(AssertionSource), default=AssertionSource.ai_generated
     )
     
-    execution_mode: Mapped[ExecutionMode] = mapped_column(SAEnum(ExecutionMode), default=ExecutionMode.sequential)
+    execution_mode: Mapped[ExecutionMode] = mapped_column(SAEnum(ExecutionMode), default=ExecutionMode.isolated)
     group_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
     sequence_order: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     depends_on_state: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

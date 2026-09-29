@@ -1,96 +1,176 @@
-from config import settings
-import json
 import re
-from ai.llm_client.client import call_llm_structured
-from pydantic import BaseModel, Field
+from pathlib import Path
 from typing import Literal, Optional
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+call_llm_structured = None
+
+
+def _generation_model() -> str | None:
+    try:
+        from config import settings
+
+        return settings.llm_model_generation
+    except Exception:
+        return None
+
+
+async def _call_llm_structured(**kwargs):
+    global call_llm_structured
+    if call_llm_structured is None:
+        from ai.llm_client.client import call_llm_structured as imported_call_llm_structured
+
+        call_llm_structured = imported_call_llm_structured
+    return await call_llm_structured(**kwargs)
+
+
 class LLMAssertion(BaseModel):
-    trigger: Literal["page_load", "click", "input", "change", "hover"]
-    trigger_selector: Optional[str] = Field(default=None)
+    model_config = ConfigDict(extra="forbid")
+
+    order: int = Field(ge=1)
+    group_id: Optional[str] = None
+    execution_mode: Literal["isolated", "sequential"] = "isolated"
+    trigger: Literal["page_load", "click", "input", "change", "hover", "call_function"]
+    trigger_selector: Optional[str] = None
+    input_value: Optional[str] = None
+    check_type: Literal[
+        "dom_presence", "dom_absence", "element_count", "text_content",
+        "attribute", "computed_style", "function_presence",
+    ]
     check_selector: str
-    wait_ms: int = Field(default=300)
-    check_type: Literal["dom_presence", "computed_style", "attribute", "text_content", "visual_region"]
-    expected_result: str
-    points: int = 5
-    execution_mode: Literal["isolated", "sequential"] = "sequential"
-    group_id: Optional[str] = Field(default=None)
-    sequence_order: Optional[int] = Field(default=1)
+    property_name: Optional[str] = None
+    operator: Literal["equals", "contains", "regex", "exists", "not_exists"] = "equals"
+    expected_value: Optional[str] = None
+    points: int = Field(default=10, ge=0, le=100)
+    is_sample: bool = False
+    wait_ms: int = Field(default=0, ge=0, le=10000)
+    sequence_order: Optional[int] = Field(default=None, ge=1)
+
+    @model_validator(mode="after")
+    def validate_contract(self):
+        if self.trigger != "page_load" and not self.trigger_selector:
+            raise ValueError("non-page-load triggers require trigger_selector")
+        if self.trigger in ("input", "change", "call_function") and self.input_value is None:
+            raise ValueError(f"{self.trigger} requires input_value")
+        if self.check_type in ("attribute", "computed_style") and not self.property_name:
+            raise ValueError(f"{self.check_type} requires property_name")
+        if self.execution_mode == "sequential" and (not self.group_id or self.sequence_order is None):
+            raise ValueError("sequential assertions require group_id and sequence_order")
+        return self
+
 
 class AssertionList(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     assertions: list[LLMAssertion]
 
-PROMPT = """You are a test automation engineer generating UI assertions for an HTML/CSS/JS coding question on an assessment platform.
 
-Your task: Generate a complete, ORDERED set of UI assertions that cover the full interaction sequence:
-  1. Initial page load state
-  2. Each intermediate user interaction step (clicks, inputs, changes, hovers)
-  3. Every distinct behavior stated in the description — including style states, pseudo-states (:hover, :disabled), and timed/delayed state changes
-  4. The final expected visual/DOM state after all interactions
+class ValidationIssue(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-Before generating assertions, silently enumerate every distinct testable requirement in the description as a checklist (one line per requirement). Then generate at least one assertion per checklist item.
+    type: Literal[
+        "ambiguous_behaviour",
+        "solution_mismatch",
+        "not_ui_observable",
+        "hidden_selector_contract",
+    ]
+    message: str
 
-CRITICAL SCHEMA RULES (DO NOT IGNORE):
-1. DISTINCT TARGETS: You must explicitly define BOTH the `trigger_selector` (the interactive element) AND the `check_selector` (the element to validate).
-2. EXECUTION MODE & GROUPING (CRITICAL):
-   - If checking an element's state or interactivity depends on prior user actions (e.g., a button that's only enabled once other fields are filled, or a UI state reachable only after a click), you MUST chain ALL assertions needed to reach and verify that state into the SAME `group_id`, ordered by `sequence_order`.
-   - Each group starts from a blank page reload — nothing from outside the group carries over.
-   - Independent, order-agnostic checks (e.g., verifying initial page load structure) should omit `group_id` (null) and use `execution_mode: isolated`.
-   - A `hover` or `click` trigger assertion that targets an element gated by other input state MUST be preceded, within the SAME group, by the setup steps (`input`/`change` assertions) that satisfy that gate.
-3. EXPECTED RESULT: `computed_style` must be `property: value`. `attribute` must be `attribute=value`. `dom_presence` must be `present` or `absent`.
 
-TESTING BEHAVIOR RULES:
-- Prefer IDs like #colorBtn, #shape. Never use class names unless the question requires them.
-- Use conservative wait_ms: static DOM=0-100, CSS transitions=500-1500, JS timers=2000-5000.
-- CSS properties MUST use check_type "computed_style".
-- :hover or :disabled states MUST include a trigger step immediately before the check.
-- SEQUENCING & PRECONDITIONS: If an element (like a button) is disabled by default, you MUST use execution_mode: "sequential" and generate prerequisite assertions that fill required inputs to enable it BEFORE generating assertions that hover or click it.
-- MULTI-FIELD PRECONDITION RULE (MANDATORY — READ REFERENCE JS BEFORE WRITING ANY CONDITIONAL CHECK):
-  Before writing ANY assertion that checks a derived/conditional UI state
-  (e.g. button enabled/disabled, class toggled, error message shown, section revealed),
-  you MUST follow these steps in order:
-    Step 1: Read the Reference JS code provided in the user message. Locate the EXACT
-            condition (if-statement, ternary, or logical expression) that controls that state.
-    Step 2: List EVERY input field whose .value, .checked, or .files.length is READ
-            inside that condition. Count them carefully.
-            Example: "username.value !== '' && password.value !== ''" has TWO fields.
-    Step 3: Generate exactly ONE setup assertion (trigger: "input" or "change") per field
-            found in Step 2. Place ALL setup assertions in the same group_id, with
-            ascending sequence_order values, BEFORE the assertion that checks the derived state.
-  RULE: Number of setup assertions = Number of fields in the JS condition. Never fewer.
-  WRONG (one precondition for a two-field condition — this will always fail):
-    [{"trigger":"input","trigger_selector":"#username","group_id":"g1","sequence_order":1},
-     {"trigger":"page_load","check_selector":"#loginBtn","expected_result":"disabled=false","group_id":"g1","sequence_order":2}]
-  CORRECT (one precondition per field — this will pass):
-    [{"trigger":"input","trigger_selector":"#username","group_id":"g1","sequence_order":1},
-     {"trigger":"input","trigger_selector":"#password","group_id":"g1","sequence_order":2},
-     {"trigger":"page_load","check_selector":"#loginBtn","expected_result":"disabled=false","group_id":"g1","sequence_order":3}]
-- Delayed/timed changes MUST be a separate assertion with wait_ms matching the delay.
-- Do not combine unrelated checks into a single assertion (e.g., verifying multiple style changes after a click). Keep each assertion focused on one check_type.
-- Mark exactly the first half (rounded down) of assertions, in generation order, as "is_sample": true (visible to candidate); remainder false.
-- Order assertions from page load to final state.
+class ValidationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-Respond ONLY with this JSON object:
-{
-  "assertions": [
-    {
-      "order": 1,
-      "trigger": "page_load" | "click" | "change" | "input" | "hover",
-      "trigger_selector": "CSS selector",
-      "check_type": "dom_presence" | "computed_style" | "text_content" | "attribute" | "visual_region",
-      "check_selector": "CSS selector",
-      "expected_result": "property: value, attribute=value, or present/absent",
-      "wait_ms": 0,
-      "points": 10,
-      "is_sample": false,
-      "execution_mode": "isolated",
-      "group_id": null,
-      "sequence_order": null,
-      "depends_on_state": null
-    }
-  ]
-}
+    status: Literal["passed", "failed"]
+    issues: list[ValidationIssue] = []
+
+
+VALIDATION_PROMPT_PATH = Path(__file__).resolve().parents[2] / "ai" / "prompts" / "validation" / "v2.md"
+
+
+PROMPT = """You generate browser assertions for an HTML/CSS/JavaScript coding question.
+
+Your only responsibility is deciding what observable requirements should be tested and how to reach them. Playwright will read actual browser values, derive expected values from the reference solution, and decide pass/fail. Return JSON only, matching the supplied schema.
+
+Rules:
+- Use only the schema's trigger, check_type, and operator values.
+- Use selectors and global function names that occur in the supplied question requirements and reference solution. Never invent an ID, class, element contract, or function name that the candidate was not explicitly told to use.
+- Set expected_value to null for values Playwright can derive: text_content, attribute, computed_style, and element_count.
+- For dom_presence and function_presence use operator "exists" and expected_value null.
+- For dom_absence use operator "not_exists" and expected_value null.
+- Use operator "equals" by default. Use contains or regex only when the written requirement explicitly calls for partial/pattern matching.
+- property_name is required only for attribute and computed_style.
+- input_value is the text for input/change. For call_function it is a JSON array encoded as a string, and trigger_selector is the global function name.
+- Independent checks use execution_mode "isolated". A workflow uses execution_mode "sequential", one group_id, and ascending sequence_order values.
+- Include every prerequisite interaction in a sequential group. Each assertion performs one trigger and one check.
+- visual_region is unsupported and must never be emitted.
+- Assertions must represent explicit requirements. Do not score code quality, naming, implementation technique, or subjective appearance.
+- Use deterministic waits only when the reference behavior requires a timer. Never exceed 10000 ms.
 """
+
+
+def _load_validation_prompt() -> str:
+    return VALIDATION_PROMPT_PATH.read_text(encoding="utf-8")
+
+
+async def validate_question_for_generation(title: str, description: str, html: str, css: str, js: str) -> None:
+    user_message = f"""Question title: {title}
+Question requirements visible to candidates:
+{description}
+
+Reference HTML:
+{html}
+
+Reference CSS:
+{css}
+
+Reference JavaScript:
+{js}
+"""
+    result = await _call_llm_structured(
+        system_prompt=_load_validation_prompt(),
+        user_message=user_message,
+        schema=ValidationResponse,
+        model=_generation_model(),
+        thinking_level="low",
+    )
+    validation = ValidationResponse.model_validate(result)
+    if validation.status != "passed":
+        issue_text = "; ".join(f"{issue.type}: {issue.message}" for issue in validation.issues)
+        raise ValueError(f"Question is not ready for assertion generation: {issue_text or 'validation failed'}")
+
+
+def _validate_selector_tokens(assertions: list[dict], requirement_source: str, reference_source: str) -> None:
+    requirement_source = requirement_source or ""
+    reference_source = reference_source or ""
+    for item in assertions:
+        selectors = []
+        if item.get("trigger") not in ("page_load", "call_function"):
+            selectors.append(item.get("trigger_selector") or "")
+        if item.get("check_type") != "function_presence":
+            selectors.append(item.get("check_selector") or "")
+        for selector in selectors:
+            for ident in re.findall(r"#([A-Za-z_][\w-]*)", selector):
+                if not re.search(rf"\b{re.escape(ident)}\b", requirement_source):
+                    raise ValueError(f"Generated selector '#{ident}' is not explicitly named in the question requirements")
+                if not re.search(rf"\b{re.escape(ident)}\b", reference_source):
+                    raise ValueError(f"Generated selector '#{ident}' is absent from the reference solution")
+            for class_name in re.findall(r"\.([A-Za-z_][\w-]*)", selector):
+                if not re.search(rf"\b{re.escape(class_name)}\b", requirement_source):
+                    raise ValueError(f"Generated selector '.{class_name}' is not explicitly named in the question requirements")
+                if not re.search(rf"\b{re.escape(class_name)}\b", reference_source):
+                    raise ValueError(f"Generated selector '.{class_name}' is absent from the reference solution")
+        function_name = ""
+        if item.get("trigger") == "call_function":
+            function_name = item.get("trigger_selector") or ""
+        elif item.get("check_type") == "function_presence":
+            function_name = item.get("check_selector") or ""
+        if function_name:
+            if not re.search(rf"\b{re.escape(function_name)}\b", requirement_source):
+                raise ValueError(f"Generated function '{function_name}' is not explicitly named in the question requirements")
+            if not re.search(rf"\b{re.escape(function_name)}\b", reference_source):
+                raise ValueError(f"Generated function '{function_name}' is absent from the reference solution")
+
 
 async def generate_assertions_from_llm(
     title: str,
@@ -102,149 +182,65 @@ async def generate_assertions_from_llm(
     failed_context: list[dict] | None = None,
     target_count: int | None = None,
     mode: str = "full",
-):
-    html = html or ""
-    css = css or ""
-    js = js or ""
-    # Pre-parse valid IDs and Classes from the reference HTML to use as a guardrail
-    valid_ids = set(re.findall(r'id=["\']([^"\']+)["\']', html))
-    valid_classes = set(c for match in re.findall(r'class=["\']([^"\']+)["\']', html) for c in match.split())
-
-    # Inject explicit allowed lists into the prompt
-    allowed_ids_str = ", ".join([f"#{i}" for i in valid_ids]) if valid_ids else "None"
-    allowed_classes_str = ", ".join([f".{c}" for c in valid_classes]) if valid_classes else "None"
-
-    user_content = f"Question Title: {title}\nQuestion Description: {description}\n\nReference HTML:\n{html}\n\nReference CSS:\n{css}\n\nReference JS:\n{js}\n\n"
-    user_content += "CRITICAL: You may ONLY use the following specific selectors found in the reference code:\n"
-    user_content += f"ALLOWED IDs: {allowed_ids_str}\nALLOWED CLASSES: {allowed_classes_str}\n\n"
-
-    # ── Context block for repair / diversify modes ────────────────────────────
-    context_block = ""
+) -> list[dict]:
+    html, css, js = html or "", css or "", js or ""
+    await validate_question_for_generation(title, description or "", html, css, js)
+    count = max(1, min(target_count or 6, 15))
+    context = ""
     if keep_assertions:
-        formatted_keep = "\n".join(
-            f"- {a['trigger']} {a.get('trigger_selector', '')} -> {a['check_type']} "
-            f"{a.get('check_selector', '')} expects {a.get('expected_result', '')}"
+        context += "\nAlready validated; do not duplicate:\n" + "\n".join(
+            f"- {a.get('trigger')} {a.get('trigger_selector')} -> {a.get('check_type')} {a.get('check_selector')}"
             for a in keep_assertions
         )
-        context_block += (
-            f"\nThe following {len(keep_assertions)} assertions ALREADY PASS validation "
-            f"against the reference solution and are FINAL — do NOT repeat, rephrase, or "
-            f"overlap their selectors, triggers, or check targets:\n{formatted_keep}\n"
-        )
-
-    if mode == "diversify" and target_count is not None:
-        need = target_count - len(keep_assertions or [])
-        context_block += (
-            f"\nGenerate exactly {need} NEW assertions covering DIFFERENT testable requirements "
-            f"from the description that are NOT already covered by the assertions listed above.\n"
-        )
-    elif mode == "repair" and failed_context:
-        formatted_fail = "\n".join(
-            f"- {a['trigger']} {a.get('trigger_selector', '')} -> {a['check_type']} "
-            f"{a.get('check_selector', '')} expected {a.get('expected_result', '')}, "
-            f"FAILED because: {a.get('error', 'unknown error')}"
+    if failed_context:
+        context += "\nRepair these requirements using valid selectors and structure:\n" + "\n".join(
+            f"- {a.get('check_type')} {a.get('check_selector')}: {a.get('error')}"
             for a in failed_context
         )
-        context_block += (
-            f"\nThe following assertions FAILED against the reference solution. "
-            f"Fix them to correctly test the SAME requirement — "
-            f"do NOT change or duplicate what already passes above:\n{formatted_fail}\n"
-        )
-    elif mode == "full":
-        count = target_count or 6
-        context_block += (
-            f"\nCRITICAL: You MUST generate EXACTLY {count} assertions in total. "
-            f"Review your checklist and prioritize the most important behaviors to hit exactly {count}. "
-            f"Do not return fewer than {count} assertions under any circumstance.\n"
-        )
+    desired = count - len(keep_assertions or []) if mode == "diversify" else count
+    desired = max(1, desired)
+    user_message = f"""Question title: {title}
+Question requirements: {description}
 
-    if context_block:
-        user_content += context_block
+Reference HTML:
+{html}
 
-    try:
-        # Schema-enforced LLM call with built-in retries and rate limiting
-        result = await call_llm_structured(
-            system_prompt=PROMPT,
-            user_message=user_content,
-            schema=AssertionList,
-            model=settings.llm_model_generation,
-            thinking_level="low"  # enough for precondition-chaining logic, well under 90s
-        )
+Reference CSS:
+{css}
 
-        # Result is already a parsed dictionary thanks to call_llm_structured
-        assertions = result.get("assertions", [])
+Reference JavaScript:
+{js}
 
-        # Guardrail check
-        is_valid = True
-        for a in assertions:
-            combined_selectors = (a.get('trigger_selector') or '') + ' ' + (a.get('check_selector') or '')
+Generate exactly {desired} new assertions.{context}
+"""
+    result = await _call_llm_structured(
+        system_prompt=PROMPT,
+        user_message=user_message,
+        schema=AssertionList,
+        model=_generation_model(),
+        thinking_level="low",
+    )
+    assertions = AssertionList.model_validate(result).model_dump()["assertions"][:15]
+    _validate_selector_tokens(assertions, description or "", "\n".join((html, css, js)))
 
-            # Check IDs
-            ids_in_selector = re.findall(r'#([a-zA-Z0-9_-]+)', combined_selectors)
-            for id_sel in ids_in_selector:
-                if id_sel not in valid_ids:
-                    print(f"Guardrail failed: ID '{id_sel}' not found in reference HTML.")
-                    is_valid = False
-
-            # Check Classes
-            classes_in_selector = re.findall(r'\.([a-zA-Z0-9_-]+)', combined_selectors)
-            for cls_sel in classes_in_selector:
-                if cls_sel not in valid_classes:
-                    print(f"Guardrail failed: Class '{cls_sel}' not found in reference HTML.")
-                    is_valid = False
-
-        if not is_valid:
-            print("Warning: Guardrail warnings detected, but returning assertions anyway.")
-
-    except Exception as e:
-        print(f"generate_assertions_from_llm failed: {e}")
-        raise e
-
-    # Cap at max 10 (full mode stays ≤6 via prompt; repair/diversify may fill quota up to 10)
-    MAX_ASSERTIONS = 10
-    assertions = assertions[:MAX_ASSERTIONS]
-
-    # Re-distribute points dynamically based on difficulty
-    def get_weight(trigger, check_type):
-        if trigger == "page_load" and check_type == "dom_presence":
-            return 1  # Easy
-        if trigger in ("click", "input", "change", "hover") and check_type == "computed_style":
-            return 3  # Hard
-        return 2  # Medium
-
-    weights = [get_weight(a.get("trigger", "page_load"), a.get("check_type", "dom_presence")) for a in assertions]
-    total_weight = sum(weights)
-
-    if total_weight > 0 and len(assertions) > 0:
-        running = 0
-        for i, a in enumerate(assertions):
-            if i < len(assertions) - 1:
-                pts = round((weights[i] / total_weight) * 50)
-                a["points"] = pts
-                running += pts
-            else:
-                a["points"] = 50 - running
-
+    # Keep scoring deterministic and make the assertion set total 100 points.
+    base, remainder = divmod(100, len(assertions))
+    for index, item in enumerate(assertions):
+        item["order"] = index + 1
+        item["points"] = base + (1 if index < remainder else 0)
+        item["is_sample"] = index < len(assertions) // 2
     return assertions
 
 
-async def generate_edge_cases_from_llm(title: str, description: str, existing_assertions: list) -> list:
-    edge_prompt = f"""
-    Based on the {len(existing_assertions)} assertions already created for '{title}', generate 2 additional edge case assertions
-    that would catch common candidate mistakes (e.g. empty/null values, wrong types, extreme values).
-    Description: {description}
-    """
-    try:
-        result = await call_llm_structured(
-            system_prompt="You are an edge-case generation AI. Generate edge cases.",
-            user_message=edge_prompt,
-            schema=AssertionList,
-            model=settings.llm_model_generation,
-            thinking_level="minimal"  # simple extraction — no reasoning needed
-        )
-        return result.get("assertions", [])[:2]
-    except Exception as e:
-        print(f"Edge Case Generator Error: {e}")
-        return []
-
-
+async def generate_edge_cases_from_llm(
+    title: str,
+    description: str,
+    existing_assertions: list,
+    html: str = "",
+    css: str = "",
+    js: str = "",
+) -> list[dict]:
+    return await generate_assertions_from_llm(
+        title, description, html, css, js, keep_assertions=existing_assertions,
+        target_count=2, mode="diversify",
+    )

@@ -20,7 +20,7 @@ interface Job {
 }
 
 interface AssertionWithStatus extends Assertion {
-  last_validation_status: "passed" | "failed" | "not_run";
+  last_validation_status: "passed" | "failed" | "flaky" | "not_run";
   last_validation_error: string | null;
   assertion_set_version: number;
 }
@@ -39,6 +39,8 @@ function StatusPill({ status, error }: { status: string; error?: string | null }
         ❌ Failed
       </span>
     );
+  if (status === "flaky")
+    return <span className="px-2 py-0.5 bg-amber-100 text-amber-700 rounded-full text-xs font-medium" title={error || "Observed values differed between reference runs"}>Needs review</span>;
   return <span className="px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full text-xs font-medium">⏳ Pending</span>;
 }
 
@@ -127,7 +129,7 @@ function GenerationModal({
               <p className="text-xs text-gray-400">{Math.round(job.elapsed_seconds)}s elapsed</p>
               <div className="bg-purple-50 text-purple-800 text-xs p-3 rounded-lg flex items-start gap-2 text-left w-full mt-6">
                 <HelpCircle className="w-4 h-4 mt-0.5 shrink-0" />
-                These assertions = 50% of the score. The other 50% comes from LLM semantic verification.
+                These Playwright assertions determine 100% of the score.
               </div>
             </>
           )}
@@ -560,7 +562,9 @@ export function AiAssertionsTab({
                   </td>
                   <td className="p-4 text-gray-600 text-sm">{a.check_type}</td>
                   <td className="p-4 text-gray-800 text-sm max-w-[180px]">
-                    <span className="truncate block" title={a.expected_result}>{a.expected_result}</span>
+                    <span className="truncate block" title={`${a.operator} ${a.expected_value ?? ""}`}>
+                      {a.property_name ? `${a.property_name} ` : ""}{a.operator} {a.expected_value ?? ""}
+                    </span>
                     {a.last_validation_status === "failed" && a.last_validation_error && (
                       <span className="block text-xs text-red-500 mt-0.5 truncate" title={a.last_validation_error}>
                         ↳ {a.last_validation_error}
@@ -599,8 +603,7 @@ export function AiAssertionsTab({
         <div className="flex items-center gap-2 text-sm text-blue-800 bg-blue-50/60 p-4 rounded-lg border border-blue-100">
           <Sparkles className="w-4 h-4 text-purple-500 shrink-0" />
           <span>
-            <span className="font-semibold">Tip:</span> These assertions account for 50% of the total score.
-            LLM semantic verification covers the remaining 50%.
+            <span className="font-semibold">Scoring:</span> Playwright assertions determine 100% of the score.
           </span>
         </div>
       )}
@@ -651,7 +654,7 @@ export function AiAssertionsTab({
                   onChange={(e) => setEditingAssertion({ ...editingAssertion, trigger: e.target.value as any })}
                   className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm"
                 >
-                  {["page_load", "click", "hover", "input", "change"].map((t) => (
+                  {["page_load", "click", "hover", "input", "change", "call_function"].map((t) => (
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
@@ -681,17 +684,53 @@ export function AiAssertionsTab({
                   onChange={(e) => setEditingAssertion({ ...editingAssertion, check_type: e.target.value as any })}
                   className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm"
                 >
-                  {["dom_presence", "computed_style", "text_content", "attribute"].map((t) => (
+                  {["dom_presence", "dom_absence", "element_count", "computed_style", "text_content", "attribute", "function_presence"].map((t) => (
                     <option key={t} value={t}>{t}</option>
                   ))}
                 </select>
               </div>
+              {(["input", "change", "call_function"] as string[]).includes(editingAssertion.trigger) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Input / Function Arguments</label>
+                  <input
+                    type="text"
+                    value={editingAssertion.input_value || ""}
+                    onChange={(e) => setEditingAssertion({ ...editingAssertion, input_value: e.target.value })}
+                    className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm font-mono"
+                    placeholder={editingAssertion.trigger === "call_function" ? "[50]" : "test value"}
+                  />
+                </div>
+              )}
+              {(["attribute", "computed_style"] as string[]).includes(editingAssertion.check_type) && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Property Name</label>
+                  <input
+                    type="text"
+                    value={editingAssertion.property_name || ""}
+                    onChange={(e) => setEditingAssertion({ ...editingAssertion, property_name: e.target.value })}
+                    className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm font-mono"
+                    placeholder="background-color"
+                  />
+                </div>
+              )}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Expected Result</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Operator</label>
+                <select
+                  value={editingAssertion.operator}
+                  onChange={(e) => setEditingAssertion({ ...editingAssertion, operator: e.target.value as Assertion["operator"] })}
+                  className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm"
+                >
+                  {["equals", "contains", "regex", "exists", "not_exists"].map((operator) => (
+                    <option key={operator} value={operator}>{operator}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Expected Value</label>
                 <textarea
                   rows={3}
-                  value={editingAssertion.expected_result}
-                  onChange={(e) => setEditingAssertion({ ...editingAssertion, expected_result: e.target.value })}
+                  value={editingAssertion.expected_value || ""}
+                  onChange={(e) => setEditingAssertion({ ...editingAssertion, expected_value: e.target.value })}
                   className="w-full border border-gray-300 rounded p-2 focus:ring focus:ring-blue-200 text-sm"
                 />
               </div>

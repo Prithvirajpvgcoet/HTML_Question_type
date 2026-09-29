@@ -17,12 +17,15 @@ export interface Assertion {
   id: string;
   question_id: string;
   order: number;
-  trigger: "page_load" | "click" | "input" | "hover" | "focus";
+  trigger: "page_load" | "click" | "input" | "change" | "hover" | "call_function";
   trigger_selector?: string;
   check_selector?: string;
   wait_ms?: number;
-  check_type: "dom_presence" | "computed_style" | "attribute" | "function_presence";
-  expected_result?: string;
+  input_value?: string;
+  check_type: "dom_presence" | "dom_absence" | "element_count" | "text_content" | "computed_style" | "attribute" | "function_presence";
+  property_name?: string;
+  operator: "equals" | "contains" | "regex" | "exists" | "not_exists";
+  expected_value?: string;
   points: number;
   is_sample: boolean;
   execution_mode: "isolated" | "sequential";
