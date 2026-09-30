@@ -118,10 +118,10 @@ export function CandidateTestPage() {
 
 
   useEffect(() => {
-    if (!candidateName) {
-      navigate(`/login/${questionId}`, { replace: true });
+    if (!candidateName && !isSubmitted) {
+      navigate(`/login/${questionId || ""}`, { replace: true });
     }
-  }, [candidateName, navigate, questionId]);
+  }, [candidateName, navigate, questionId, isSubmitted]);
 
   useEffect(() => {
     if (!autoRun) return;
