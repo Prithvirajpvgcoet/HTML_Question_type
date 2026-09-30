@@ -3,7 +3,6 @@ from pydantic_settings import BaseSettings
 class Settings(BaseSettings):
     database_url: str
     database_url_sync: str
-    redis_url: str
     gemini_api_key: str
     llm_model_generation: str = "gemini-3.1-flash-lite"
     llm_model_scoring: str = "gemini-3.1-flash-lite"
