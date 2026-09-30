@@ -401,9 +401,22 @@ export function AiAssertionsTab({
   const handleDeleteAssertion = async (assertionId: string) => {
     try {
       await api.delete(`/questions/assertions/${assertionId}`);
-      const next = assertions.filter((a) => a.id !== assertionId);
+      let next = assertions.filter((a) => a.id !== assertionId);
+      
+      if (next.length > 0) {
+        const base = Math.floor(100 / next.length);
+        const rem = 100 % next.length;
+        next = await Promise.all(next.map(async (a, i) => {
+          const pts = base + (i < rem ? 1 : 0);
+          if (a.points !== pts) {
+            const res = await api.put(`/questions/assertions/${a.id}`, { ...a, points: pts });
+            return res.data;
+          }
+          return a;
+        }));
+      }
       setAssertions(next);
-      // Recompute banner
+      
       const passed = next.filter((a) => a.last_validation_status === "passed");
       const failed = next.filter((a) => a.last_validation_status === "failed");
       setValidationResult(failed.length > 0 ? { passed, failed, repairRoundsUsed: validationResult?.repairRoundsUsed ?? 0 } : null);

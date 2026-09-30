@@ -22,7 +22,29 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-MAX_REPAIR_ROUNDS = 2  # after this many auto-repair attempts, stop and force manual edit
+MAX_REPAIR_ROUNDS = 2
+
+
+class QuestionPublic(BaseModel):
+    id: str
+    title: str
+    description_html: str
+    purpose: str | None = None
+    question_type: str | None = None
+    starter_html: str | None = None
+    starter_css: str | None = None
+    starter_js: str | None = None
+    question_bank_name: str | None = None
+    is_published: bool
+
+@router.get("/{question_id}/public", response_model=QuestionPublic)
+async def get_question_public(question_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    q = result.scalar_one_or_none()
+    if not q:
+        raise HTTPException(status_code=404, detail="Question not found")
+    return q
+
 EMPTY_SUBMISSION_MAX_SCORE_PCT = 20
 
 
@@ -43,6 +65,7 @@ def _serialize_assertion(a: Assertion) -> dict:
         "expected_value": a.expected_value,
         "points": a.points,
         "is_sample": a.is_sample,
+        "wait_ms": a.wait_ms,
         "execution_mode": a.execution_mode.value if hasattr(a.execution_mode, "value") else a.execution_mode,
         "group_id": a.group_id,
         "sequence_order": a.sequence_order,
@@ -267,25 +290,9 @@ async def _run_generation_job(
                 for a in failed_assertions_db
             ]
 
-            if mode == "full":
-                # Delete all existing assertions first
-                await db.execute(
-                    text(
-                        "DELETE FROM evaluation_results WHERE assertion_id "
-                        "IN (SELECT id FROM assertions WHERE question_id=:qid)"
-                    ),
-                    {"qid": question_id},
-                )
-                await db.execute(sa_delete(Assertion).where(Assertion.question_id == question_id))
-                q.validation_status = ValidationStatus.not_run
-                q.is_published = False
-                await db.commit()
-
-            elif mode == "repair":
-                # Delete only the failed rows before generating replacements
-                if failed_ids:
-                    await db.execute(sa_delete(Assertion).where(Assertion.id.in_(failed_ids)))
-                    await db.commit()
+            # Staged generation: We DO NOT delete the old assertions here anymore.
+            # We wait until the LLM returns successfully to prevent data loss on timeout/failure.
+            pass
 
             # ── LLM call (hard timeout 90 s) ──────────────────────────────
             if mode == "edge_cases":
@@ -359,6 +366,18 @@ async def _run_generation_job(
 # ---------------------------------------------------------------------------
 # Pydantic schemas
 # ---------------------------------------------------------------------------
+
+
+class UpdateQuestionReq(BaseModel):
+    title: str
+    description_html: str = ""
+    purpose: str | None = None
+    question_type: str = "HTML/CSS/JS"
+    question_bank_name: str | None = None
+    starter_html: str | None = None
+    starter_css: str | None = None
+    starter_js: str | None = None
+    is_published: bool | None = None
 
 class CreateQuestionReq(BaseModel):
     title: str
@@ -524,6 +543,16 @@ async def generate_assertions(
             status_code=400,
             detail="A reference HTML solution must be saved before generating assertions.",
         )
+
+    from datetime import timedelta
+    # Job Reaper: auto-fail any active jobs older than 5 minutes
+    stale_cutoff = datetime.utcnow() - timedelta(minutes=5)
+    await db.execute(
+        text("UPDATE assertion_generation_jobs SET status = 'failed', error_message = 'Job timed out unexpectedly' "
+             "WHERE question_id = :qid AND status IN ('queued', 'analyzing', 'validating') AND started_at < :cutoff"),
+        {"qid": question_id, "cutoff": stale_cutoff}
+    )
+    await db.commit()
 
     # Concurrency guard: one active job per question
     active = await db.execute(
@@ -845,7 +874,17 @@ async def generate_edge_cases(
             detail="A reference HTML solution must be saved before generating edge cases.",
         )
 
-    # Concurrency guard
+    from datetime import timedelta
+    # Job Reaper: auto-fail any active jobs older than 5 minutes
+    stale_cutoff = datetime.utcnow() - timedelta(minutes=5)
+    await db.execute(
+        text("UPDATE assertion_generation_jobs SET status = 'failed', error_message = 'Job timed out unexpectedly' "
+             "WHERE question_id = :qid AND status IN ('queued', 'analyzing', 'validating') AND started_at < :cutoff"),
+        {"qid": question_id, "cutoff": stale_cutoff}
+    )
+    await db.commit()
+
+    # Concurrency guard: one active job per question
     active = await db.execute(
         select(AssertionGenerationJob).where(
             AssertionGenerationJob.question_id == question_id,

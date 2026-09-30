@@ -38,13 +38,21 @@ async def get_invite(token: str, db: AsyncSession = Depends(get_db)):
     if invite.used_at is not None or invite.expires_at < datetime.utcnow():
         raise HTTPException(status_code=400, detail="Invite invalid or expired")
 
-    invite.used_at = datetime.utcnow()
-    await db.commit()
+    if invite.started_at is None:
+        import datetime as dt
+        invite.started_at = dt.datetime.now(dt.timezone.utc)
+        await db.commit()
+
+    # The deadline is started_at + 60 minutes
+    from datetime import timedelta
+    deadline = invite.started_at + timedelta(minutes=60)
 
     return {
         "question_id": invite.question_id,
         "candidate_name": invite.candidate_name,
         "candidate_email": invite.candidate_email,
+        "started_at": invite.started_at,
+        "deadline": deadline.isoformat() + "Z" if deadline.tzinfo is None else deadline.isoformat(),
         "used_at": invite.used_at
     }
 

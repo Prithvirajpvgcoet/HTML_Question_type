@@ -77,7 +77,7 @@ class SubmissionResult:
 
 
 IFRAME_SELECTOR = "#candidate-preview"
-ACTION_TIMEOUT_MS = 3000
+ACTION_TIMEOUT_MS = 500
 POLL_INTERVAL_MS = 100
 MAX_SETTLE_WAIT_MS = 3000
 
@@ -173,15 +173,26 @@ class CandidateEvaluator:
             )
         selector = (assertion.check_selector or "").replace("\n", "").strip()
         locator = self._frame().locator(selector)
+        count = locator.count()
+        
         if assertion.check_type == CheckType.DOM_PRESENCE:
-            return locator.count() > 0
+            return count > 0
         if assertion.check_type == CheckType.DOM_ABSENCE:
-            return locator.count() == 0
+            return count == 0
         if assertion.check_type == CheckType.ELEMENT_COUNT:
-            return locator.count()
+            return count
+            
+        # Fail fast if element missing for state checks
+        if count == 0:
+            return None
+            
         first = locator.first
+        
         if assertion.check_type == CheckType.TEXT_CONTENT:
-            return (first.text_content(timeout=ACTION_TIMEOUT_MS) or "").strip()
+            # Audit says whitespace should be normalized, not just stripped
+            text = (first.text_content(timeout=ACTION_TIMEOUT_MS) or "")
+            import re
+            return re.sub(r"\s+", " ", text).strip()
         if assertion.check_type == CheckType.ATTRIBUTE:
             if not assertion.property_name:
                 raise ValueError("attribute checks require property_name")

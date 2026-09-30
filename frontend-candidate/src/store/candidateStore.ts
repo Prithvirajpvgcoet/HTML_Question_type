@@ -4,7 +4,8 @@ import { persist } from "zustand/middleware";
 interface CandidateState {
   candidateName: string;
   candidateEmail: string;
-  setCandidateInfo: (name: string, email: string) => void;
+  token: string;
+  setCandidateInfo: (name: string, email: string, token: string) => void;
   clearCandidateInfo: () => void;
 }
 
@@ -13,8 +14,9 @@ export const useCandidateStore = create<CandidateState>()(
     (set) => ({
       candidateName: "",
       candidateEmail: "",
-      setCandidateInfo: (name, email) => set({ candidateName: name, candidateEmail: email }),
-      clearCandidateInfo: () => set({ candidateName: "", candidateEmail: "" }),
+      token: "",
+      setCandidateInfo: (name, email, token) => set({ candidateName: name, candidateEmail: email, token: token }),
+      clearCandidateInfo: () => set({ candidateName: "", candidateEmail: "", token: "" }),
     }),
     {
       name: "imocha-candidate-storage",

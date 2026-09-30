@@ -1,3 +1,4 @@
+import uuid
 import pytest
 from httpx import AsyncClient, ASGITransport
 from main import app
@@ -57,13 +58,13 @@ from sqlalchemy.future import select
 async def test_expired_invite_returns_400():
     # 1. Create a dummy question and expired invite
     async with AsyncSessionLocal() as db:
-        q = Question(id='dummy-q-id', title='q', description_html='')
+        q = Question(id='dummy-q-id-' + str(uuid.uuid4()), title='q', description_html='')
         db.add(q)
         await db.commit()
         
         expired_invite = CandidateInvite(
-            token='expired-token-123',
-            question_id='dummy-q-id',
+            token='expired-token-' + str(uuid.uuid4()),
+            question_id='dummy-q-id-' + str(uuid.uuid4()),
             candidate_name='Test Name',
             candidate_email='test@example.com',
             expires_at=datetime.utcnow() - timedelta(days=1)
@@ -73,6 +74,6 @@ async def test_expired_invite_returns_400():
 
     # 2. Hit the endpoint
     async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as client:
-        res = await client.get('/api/v1/invites/expired-token-123')
+        res = await client.get(f'/api/v1/invites/{expired_invite.token}')
         assert res.status_code == 400
         assert res.json()['detail'] == 'Invite invalid or expired'

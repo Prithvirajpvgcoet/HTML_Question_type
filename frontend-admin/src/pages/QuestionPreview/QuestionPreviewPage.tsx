@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { api } from "../../api/client";
@@ -148,7 +149,7 @@ export function QuestionPreviewPage() {
             </div>
             <div
               className="prose prose-sm max-w-none text-gray-700 leading-relaxed"
-              dangerouslySetInnerHTML={{ __html: question.description_html }}
+              dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(question.description_html) }}
             />
 
             {/* Note box */}

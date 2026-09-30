@@ -1,4 +1,4 @@
-import { Home, FileText, ClipboardCheck, MessageSquare, Target, } from "lucide-react";
+import { Home, FileText, ClipboardCheck, } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 
 export function Sidebar() {
@@ -9,8 +9,8 @@ export function Sidebar() {
     { icon: Home, label: "Home", path: "/" },
     { icon: FileText, label: "Tests", path: "/questions" },
     { icon: ClipboardCheck, label: "Reports", path: "/reports" },
-    { icon: MessageSquare, label: "AI Interview", path: "#", beta: true },
-    { icon: Target, label: "AI Skills Match", path: "#", beta: true },
+    
+    
     
   ];
 
@@ -26,11 +26,7 @@ export function Sidebar() {
               : "text-gray-400 hover:text-white"
           }`}
         >
-          {item.beta && (
-            <span className="text-[9px] font-bold text-imocha-orange absolute top-1 right-2">
-              BETA
-            </span>
-          )}
+          
           <item.icon className="w-5 h-5" strokeWidth={2} />
           <span className="text-[10px] font-medium text-center px-1 leading-tight">
             {item.label}

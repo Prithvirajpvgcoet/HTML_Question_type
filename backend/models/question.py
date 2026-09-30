@@ -30,6 +30,11 @@ class Question(Base):
     reference_css: Mapped[str] = mapped_column(Text, nullable=True)
     reference_js: Mapped[str] = mapped_column(Text, nullable=True)
 
+    # Candidate starter stubs
+    starter_html: Mapped[str] = mapped_column(Text, nullable=True)
+    starter_css: Mapped[str] = mapped_column(Text, nullable=True)
+    starter_js: Mapped[str] = mapped_column(Text, nullable=True)
+
     # AI layer extensions
     validation_status: Mapped[ValidationStatus] = mapped_column(
         SAEnum(ValidationStatus), default=ValidationStatus.not_run

@@ -34,9 +34,9 @@ export function QuestionTab({ questionId, onNext }: { questionId?: string | null
           description_html: desc,
           purpose: purpose,
           question_type: codeStubType,
-          reference_html: stubHtml,
-          reference_css: stubCss,
-          reference_js: stubJs,
+          starter_html: stubHtml,
+          starter_css: stubCss,
+          starter_js: stubJs,
           question_bank_name: "HTML/CSS/JS Coding (Shared)"
         });
         setLastSaved(new Date());
@@ -57,9 +57,9 @@ export function QuestionTab({ questionId, onNext }: { questionId?: string | null
         setDesc(q.description_html);
         if (q.purpose) setPurpose(q.purpose);
         if (q.question_type) setCodeStubType(q.question_type);
-        setStubHtml(q.reference_html || "");
-        setStubCss(q.reference_css || "");
-        setStubJs(q.reference_js || "");
+        setStubHtml(q.starter_html || "");
+        setStubCss(q.starter_css || "");
+        setStubJs(q.starter_js || "");
       }).catch(e => console.error(e));
     }
   }, [questionId]);

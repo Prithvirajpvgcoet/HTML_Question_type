@@ -14,4 +14,5 @@ class CandidateInvite(Base):
     
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     expires_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.utcnow() + timedelta(days=7))
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     used_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)

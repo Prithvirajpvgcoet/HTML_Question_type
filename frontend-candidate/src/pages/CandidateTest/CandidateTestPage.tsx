@@ -1,5 +1,6 @@
+import DOMPurify from "dompurify";
 import { useState, useEffect, useRef } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../../api/client";
 import { CodeEditor } from "../../components/CodeEditor";
 import { LivePreview } from "../../components/LivePreview";
@@ -21,7 +22,9 @@ import { useCandidateStore } from "../../store/candidateStore";
 export function CandidateTestPage() {
   const { questionId } = useParams();
   const navigate = useNavigate();
-  const { candidateName, candidateEmail } = useCandidateStore();
+  const { candidateName, candidateEmail, token } = useCandidateStore();
+  const [searchParams] = useSearchParams();
+  const isPreview = searchParams.get("preview") === "true";
 
   const [question, setQuestion] = useState<Question | null>(null);
   const [activeCodeTab, setActiveCodeTab] = useState<"html" | "css" | "javascript">("html");
@@ -73,19 +76,36 @@ export function CandidateTestPage() {
     codeRef.current = { html, css, js };
   }, [html, css, js]);
 
-  // Countdown timer
+  // Initialize Server Deadline
   useEffect(() => {
-    if (timeLeft <= 0 || !candidateName) return;
-    const t = setInterval(() => setTimeLeft((prev) => {
-      if (prev <= 1) {
-        clearInterval(t);
-        executeSubmit();
-        return 0;
-      }
-      return prev - 1;
-    }), 1000);
-    return () => clearInterval(t);
-  }, [timeLeft, candidateName]);
+    if (isPreview) return;
+    if (token) {
+      api.get(`/invites/${token}`).then(res => {
+        if (res.data.deadline) {
+          const deadlineStr = res.data.deadline.endsWith("Z") ? res.data.deadline : res.data.deadline + "Z";
+          const deadline = new Date(deadlineStr).getTime();
+          let t: any;
+          const updateTime = () => {
+            const now = new Date().getTime();
+            const distance = Math.floor((deadline - now) / 1000);
+            if (distance <= 0) {
+               setTimeLeft(0);
+               if (t) clearInterval(t);
+               executeSubmit();
+            } else {
+               setTimeLeft(distance);
+            }
+          };
+          updateTime();
+          t = setInterval(updateTime, 1000);
+          return () => clearInterval(t);
+        }
+      }).catch(() => {
+        alert("Invite invalid or expired");
+        navigate(`/login/${questionId || ""}`, { replace: true });
+      });
+    }
+  }, [token, isPreview, questionId, navigate]);
 
 
   useEffect(() => {
@@ -122,6 +142,7 @@ export function CandidateTestPage() {
   };
 
   const executeSubmit = async () => {
+    if (submitting || isSubmitted) return;
     setShowConfirm(false);
     setSubmitting(true);
     try {
@@ -129,7 +150,8 @@ export function CandidateTestPage() {
         question_id: questionId,
         candidate_name: candidateName,
         candidate_email: candidateEmail,
-        submitted_html: codeRef.current.html,
+          token: token,
+          submitted_html: codeRef.current.html,
         submitted_css: codeRef.current.css,
         submitted_js: codeRef.current.js,
       });
@@ -284,7 +306,7 @@ export function CandidateTestPage() {
                   <>
                     <div
                       className="prose prose-sm max-w-none text-gray-700 leading-relaxed mb-4"
-                      dangerouslySetInnerHTML={{ __html: question.description_html }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(question.description_html) }}
                     />
                     {/* Note box */}
                     <div className="bg-blue-50 border border-blue-200 rounded-lg p-3.5 flex gap-2.5 mb-5">

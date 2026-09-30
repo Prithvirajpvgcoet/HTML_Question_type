@@ -89,7 +89,7 @@ export function ReviewTab({ questionId, onBack, onPublish }: { questionId: strin
             <p className="text-gray-600 mb-6 text-sm">Your question has been configured, assertions are set, and the reference solution compiles correctly.</p>
             
             <div className="flex gap-4 justify-center">
-              <button onClick={() => window.open(`${import.meta.env.VITE_CANDIDATE_URL || "http://localhost:5174"}/test/${questionId}`, "_blank")} className="px-5 py-2 border border-gray-300 rounded-md text-gray-700 font-medium hover:bg-white bg-gray-50 text-sm">
+              <button onClick={() => window.open(`${import.meta.env.VITE_CANDIDATE_URL || "http://localhost:5174"}/test/${questionId}?preview=true`, "_blank")} className="px-5 py-2 border border-gray-300 rounded-md text-gray-700 font-medium hover:bg-white bg-gray-50 text-sm">
                 Preview Candidate View
               </button>
             </div>

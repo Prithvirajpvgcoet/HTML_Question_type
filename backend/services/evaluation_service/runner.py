@@ -67,22 +67,11 @@ def _run_sync_evaluation(html: str, css: str, js: str, assertions: list[dict], c
             (() => {{
               let seed = 123456789;
               Math.random = () => ((seed = (seed * 16807) % 2147483647) - 1) / 2147483646;
-              const RealDate = Date;
-              const fixedEpoch = {FIXED_EPOCH_MS};
-              Date = class extends RealDate {{
-                constructor(...args) {{ super(...(args.length ? args : [fixedEpoch])); }}
-                static now() {{ return fixedEpoch; }}
-              }};
             }})();
             """
         )
         page = context.new_page()
-        try:
-            clock = getattr(page, "clock", None)
-            if clock:
-                clock.install(time=FIXED_EPOCH_MS)
-        except Exception:
-            pass
+
         evaluator = CandidateEvaluator(page)
         typed = [
             Assertion(
@@ -134,9 +123,13 @@ def _process_entry(queue, html: str, css: str, js: str, assertions: list[dict], 
 def _run_with_hard_timeout(html: str, css: str, js: str, assertions: list[dict], capture_only: bool) -> list[dict]:
     ctx = multiprocessing.get_context("spawn")
     queue = ctx.Queue()
+    
+    # Scale timeout based on number of assertions (min 30s)
+    dynamic_timeout = max(30, len(assertions) * 2)
+
     process = ctx.Process(target=_process_entry, args=(queue, html, css, js, assertions, capture_only), daemon=True)
     process.start()
-    process.join(SUBMISSION_TIMEOUT_SECONDS)
+    process.join(dynamic_timeout)
     if process.is_alive():
         process.terminate()
         process.join(3)
@@ -144,7 +137,7 @@ def _run_with_hard_timeout(html: str, css: str, js: str, assertions: list[dict],
             process.kill()
             
         queue.cancel_join_thread()
-        raise RuntimeError(f"Playwright evaluation exceeded {SUBMISSION_TIMEOUT_SECONDS} seconds. Fix your reference code.")
+        raise RuntimeError(f"Playwright evaluation exceeded {dynamic_timeout} seconds.")
     try:
         ok, payload = queue.get(timeout=1)
     except Empty as exc:

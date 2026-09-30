@@ -22,7 +22,7 @@ export function CandidateLoginPage() {
     api.get(`/invites/${token}`)
       .then(res => {
         const { question_id, candidate_name, candidate_email } = res.data;
-        setCandidateInfo(candidate_name, candidate_email);
+        setCandidateInfo(candidate_name, candidate_email, token);
         navigate(`/test/${question_id}`, { replace: true });
       })
       .catch(() => {

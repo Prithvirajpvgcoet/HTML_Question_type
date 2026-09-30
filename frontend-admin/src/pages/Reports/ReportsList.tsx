@@ -5,6 +5,7 @@ import { ChevronRight, Search } from "lucide-react";
 
 export function ReportsList() {
   const [submissions, setSubmissions] = useState([]);
+  const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -23,7 +24,7 @@ export function ReportsList() {
         <div className="p-4 border-b bg-gray-50 flex items-center justify-between">
           <div className="relative">
             <Search className="w-4 h-4 absolute left-3 top-2.5 text-gray-400" />
-            <input type="text" placeholder="Search candidates..." className="pl-9 pr-4 py-2 border rounded-md text-sm w-64 focus:ring-1 focus:ring-blue-500" />
+            <input type="text" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search candidates..." className="pl-9 pr-4 py-2 border rounded-md text-sm w-64 focus:ring-1 focus:ring-blue-500" />
           </div>
         </div>
         
@@ -38,13 +39,13 @@ export function ReportsList() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
-            {submissions.map((sub: any) => (
+            {submissions.filter((s: any) => !search || (s.candidate_name || "").toLowerCase().includes(search.toLowerCase())).map((sub: any) => (
               <tr key={sub.id} className="hover:bg-gray-50 cursor-pointer" onClick={() => navigate(`/reports/${sub.id}`)}>
                 <td className="py-4 px-6 font-medium text-gray-800 flex items-center gap-3">
                   <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xs">
-                    {sub.candidate_name.split(' ').map((n: string) => n[0]).join('')}
+                    {(sub.candidate_name || 'Unknown Candidate').split(' ').map((n: string) => n[0]).join('')}
                   </div>
-                  {sub.candidate_name}
+                  {sub.candidate_name || "Unknown Candidate"}
                 </td>
                 <td className="py-4 px-6 text-gray-600">
                   {new Date(sub.submitted_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}

@@ -5,3 +5,5 @@ from .submission import Submission, SubmissionStatus
 from .evaluation_result import EvaluationResult, TCStatus, ReviewFlag
 
 from .candidate_invite import CandidateInvite
+
+from .user import User

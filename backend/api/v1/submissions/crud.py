@@ -18,12 +18,30 @@ class CreateSubmissionReq(BaseModel):
     question_id: str
     candidate_name: str = "Test Candidate"
     candidate_email: str | None = None
+    token: str | None = None
     submitted_html: str = ""
     submitted_css: str = ""
     submitted_js: str = ""
 
 @router.post("")
 async def create_submission(req: CreateSubmissionReq, db: AsyncSession = Depends(get_db)):
+    if req.token:
+        from models import CandidateInvite
+        from datetime import datetime
+        res = await db.execute(select(CandidateInvite).where(CandidateInvite.token == req.token))
+        invite = res.scalar_one_or_none()
+        if not invite:
+            raise HTTPException(status_code=400, detail="Invalid token")
+        if invite.used_at:
+            raise HTTPException(status_code=400, detail="Invite already used. You can only submit once.")
+        invite.used_at = datetime.utcnow()
+        # You could also check deadline here
+
+    from models.question import Question
+    q_res = await db.execute(select(Question).where(Question.id == req.question_id))
+    q = q_res.scalar_one_or_none()
+    current_version = q.assertion_set_version if q else 0
+
     sub = Submission(
         question_id=req.question_id,
         candidate_name=req.candidate_name,
@@ -31,7 +49,8 @@ async def create_submission(req: CreateSubmissionReq, db: AsyncSession = Depends
         submitted_html=req.submitted_html,
         submitted_css=req.submitted_css,
         submitted_js=req.submitted_js,
-        status=SubmissionStatus.pending
+        status=SubmissionStatus.pending,
+        assertion_set_version=current_version
     )
     db.add(sub)
     await db.commit()
@@ -52,6 +71,20 @@ async def trigger_evaluation(
 
     background_tasks.add_task(process_evaluation_task, submission_id)
     return {"message": "Evaluation queued.", "submission_id": submission_id}
+
+
+
+class SubmissionStatusResp(BaseModel):
+    id: str
+    status: str
+
+@router.get("/{submission_id}/status", response_model=SubmissionStatusResp)
+async def get_submission_status(submission_id: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Submission).where(Submission.id == submission_id))
+    submission = result.scalar_one_or_none()
+    if not submission:
+        raise HTTPException(status_code=404, detail="Submission not found")
+    return {"id": submission.id, "status": submission.status}
 
 
 @router.get("/{submission_id}/evaluation")

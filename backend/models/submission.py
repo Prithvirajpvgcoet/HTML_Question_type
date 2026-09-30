@@ -40,6 +40,7 @@ class Submission(Base):
     ai_feedback_breakdown: Mapped[str] = mapped_column(Text, nullable=True)
     ai_confidence: Mapped[str] = mapped_column(String(50), nullable=True)
     needs_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    assertion_set_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     submitted_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     evaluated_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
     evaluation_results = relationship(
