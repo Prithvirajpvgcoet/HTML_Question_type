@@ -27,7 +27,7 @@ async def _call_llm_structured(**kwargs):
 
 
 class LLMAssertion(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+
 
     order: int = Field(ge=1)
     group_id: Optional[str] = None
@@ -62,12 +62,12 @@ class LLMAssertion(BaseModel):
 
 
 class AssertionList(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+
     assertions: list[LLMAssertion]
 
 
 class ValidationIssue(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+
 
     type: Literal[
         "ambiguous_behaviour",
@@ -79,7 +79,7 @@ class ValidationIssue(BaseModel):
 
 
 class ValidationResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+
 
     status: Literal["passed", "failed"]
     issues: list[ValidationIssue] = []
