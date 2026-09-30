@@ -1,31 +1,15 @@
-import { useState, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { useCandidateStore } from "../../store/candidateStore";
+import os
 
-import { api } from "../../api/client";
+file_path = 'frontend-candidate/src/pages/CandidateLogin/CandidateLoginPage.tsx'
+with open(file_path, 'r', encoding='utf-8') as f:
+    code = f.read()
 
-export function CandidateLoginPage() {
-  const { token } = useParams();
-  const navigate = useNavigate();
-  const { setCandidateInfo } = useCandidateStore();
-  
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
-
-  useEffect(() => {
-    if (!token) {
-      setError("Invalid invite link.");
-      setLoading(false);
-      return;
-    }
-
-    api.get(`/invites/${token}`)
-      .then(res => {
-        const { question_id, candidate_name, candidate_email } = res.data;
-        setCandidateInfo(candidate_name, candidate_email, token);
-        navigate(`/test/${question_id}`, { replace: true });
-      })
-      .catch((err: any) => {
+# Update the catch block to read the error detail
+old_catch = '''      .catch(() => {
+        setError("This invite link is invalid or has expired.");
+        setLoading(false);
+      });'''
+new_catch = '''      .catch((err: any) => {
         const detail = err.response?.data?.detail;
         if (detail === "Test already completed") {
           setError("completed");
@@ -35,18 +19,20 @@ export function CandidateLoginPage() {
           setError("invalid");
         }
         setLoading(false);
-      });
-  }, [token, navigate, setCandidateInfo]);
+      });'''
+code = code.replace(old_catch, new_catch)
 
-  if (loading) {
+# Update the UI
+old_ui = '''  if (error) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
-        <div className="w-12 h-12 border-4 border-gray-200 border-t-blue-600 rounded-full animate-spin"></div>
+        <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-8 border border-gray-100 text-center text-red-600 font-medium">
+          {error}
+        </div>
       </div>
     );
-  }
-
-  if (error) {
+  }'''
+new_ui = '''  if (error) {
     if (error === "completed") {
       return (
         <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -70,7 +56,9 @@ export function CandidateLoginPage() {
         </div>
       </div>
     );
-  }
+  }'''
+code = code.replace(old_ui, new_ui)
 
-  return null;
-}
+with open(file_path, 'w', encoding='utf-8') as f:
+    f.write(code)
+print('Patched CandidateLoginPage UI')

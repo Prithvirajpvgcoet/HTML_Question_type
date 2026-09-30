@@ -35,8 +35,10 @@ async def get_invite(token: str, db: AsyncSession = Depends(get_db)):
     if not invite:
         raise HTTPException(status_code=404, detail="Token not found")
 
-    if invite.used_at is not None or invite.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Invite invalid or expired")
+    if invite.used_at is not None:
+        raise HTTPException(status_code=400, detail="Test already completed")
+    if invite.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Invite expired")
 
     if invite.started_at is None:
         invite.started_at = datetime.utcnow()
