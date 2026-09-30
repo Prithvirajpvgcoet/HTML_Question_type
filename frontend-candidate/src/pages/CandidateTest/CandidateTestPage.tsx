@@ -22,7 +22,7 @@ import { useCandidateStore } from "../../store/candidateStore";
 export function CandidateTestPage() {
   const { questionId } = useParams();
   const navigate = useNavigate();
-  const { candidateName, candidateEmail, token } = useCandidateStore();
+  const { candidateName, candidateEmail, token, clearCandidateInfo } = useCandidateStore();
   const [searchParams] = useSearchParams();
   const isPreview = searchParams.get("preview") === "true";
 
@@ -78,33 +78,42 @@ export function CandidateTestPage() {
 
   // Initialize Server Deadline
   useEffect(() => {
-    if (isPreview) return;
-    if (token) {
-      api.get(`/invites/${token}`).then(res => {
-        if (res.data.deadline) {
-          const deadlineStr = res.data.deadline.endsWith("Z") ? res.data.deadline : res.data.deadline + "Z";
-          const deadline = new Date(deadlineStr).getTime();
-          let t: any;
-          const updateTime = () => {
-            const now = new Date().getTime();
-            const distance = Math.floor((deadline - now) / 1000);
-            if (distance <= 0) {
-               setTimeLeft(0);
-               if (t) clearInterval(t);
-               executeSubmit();
-            } else {
-               setTimeLeft(distance);
-            }
-          };
-          updateTime();
-          t = setInterval(updateTime, 1000);
-          return () => clearInterval(t);
+    if (isPreview || !token) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+
+    api.get(`/invites/${token}`).then(res => {
+      if (cancelled) return;
+      if (res.data.deadline) {
+        const raw = String(res.data.deadline).replace(/(\+00:00)?Z?$/, "Z");
+        const deadline = Date.parse(raw);
+        if (Number.isNaN(deadline)) return;
+
+        if (deadline - Date.now() <= 0) {
+           setTimeLeft(0);
+           return; // Already expired, do not auto-submit on load
         }
-      }).catch(() => {
-        alert("Invite invalid or expired");
-        navigate(`/login/${questionId || ""}`, { replace: true });
-      });
-    }
+
+        const tick = () => {
+          const left = Math.floor((deadline - Date.now()) / 1000);
+          setTimeLeft(Math.max(left, 0));
+          if (left <= 0) { 
+             if (timer) clearInterval(timer);
+             submitFnRef.current(); 
+          }
+        };
+        tick();
+        timer = setInterval(tick, 1000);
+      }
+    }).catch(() => {
+      alert("Invite invalid or expired");
+      navigate(`/login/${questionId || ""}`, { replace: true });
+    });
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
   }, [token, isPreview, questionId, navigate]);
 
 
@@ -141,8 +150,12 @@ export function CandidateTestPage() {
     setJs("");
   };
 
+  const submittedRef = useRef(false);
+  const submitFnRef = useRef<() => void>(() => {});
+
   const executeSubmit = async () => {
-    if (submitting || isSubmitted) return;
+    if (submittedRef.current) return;
+    submittedRef.current = true;
     setShowConfirm(false);
     setSubmitting(true);
     try {
@@ -167,6 +180,7 @@ export function CandidateTestPage() {
             clearInterval(poll);
             setSubmitting(false);
             setIsSubmitted(true);
+              clearCandidateInfo();
           }
         } catch (e) { console.error(e); }
       }, 2000);
@@ -176,6 +190,8 @@ export function CandidateTestPage() {
       setSubmitting(false);
     }
   };
+  submitFnRef.current = executeSubmit;
+
 
 
   if (isSubmitted) {

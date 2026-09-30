@@ -28,14 +28,18 @@ async def create_submission(req: CreateSubmissionReq, db: AsyncSession = Depends
     if req.token:
         from models import CandidateInvite
         from datetime import datetime
-        res = await db.execute(select(CandidateInvite).where(CandidateInvite.token == req.token))
-        invite = res.scalar_one_or_none()
-        if not invite:
-            raise HTTPException(status_code=400, detail="Invalid token")
-        if invite.used_at:
-            raise HTTPException(status_code=400, detail="Invite already used. You can only submit once.")
-        invite.used_at = datetime.utcnow()
+        from sqlalchemy import update
+        res = await db.execute(
+            update(CandidateInvite)
+            .where(CandidateInvite.token == req.token, CandidateInvite.used_at.is_(None))
+            .values(used_at=datetime.utcnow())
+        )
+        if res.rowcount == 0:
+            raise HTTPException(status_code=400, detail="Invite already used or invalid.")
         # You could also check deadline here
+
+    if not (req.submitted_html or req.submitted_css or req.submitted_js).strip():
+        raise HTTPException(status_code=400, detail="Empty submission")
 
     from models.question import Question
     q_res = await db.execute(select(Question).where(Question.id == req.question_id))
@@ -68,6 +72,11 @@ async def trigger_evaluation(
     sub = result.scalar_one_or_none()
     if not sub:
         raise HTTPException(status_code=404, detail="Submission not found")
+    
+    if sub.status != SubmissionStatus.pending:
+        return {"message": "Already queued", "submission_id": submission_id}
+    sub.status = SubmissionStatus.queued
+    await db.commit()
 
     background_tasks.add_task(process_evaluation_task, submission_id)
     return {"message": "Evaluation queued.", "submission_id": submission_id}
