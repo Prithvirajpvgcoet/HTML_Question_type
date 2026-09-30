@@ -39,8 +39,7 @@ async def get_invite(token: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Invite invalid or expired")
 
     if invite.started_at is None:
-        import datetime as dt
-        invite.started_at = dt.datetime.now(dt.timezone.utc)
+        invite.started_at = datetime.utcnow()
         await db.commit()
 
     # The deadline is started_at + 60 minutes
