@@ -18,6 +18,8 @@ target_metadata = Base.metadata
 def run_migrations_offline() -> None:
     from config import settings
     url = settings.database_url_sync or config.get_main_option("sqlalchemy.url")
+    if url and url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -32,6 +34,8 @@ def run_migrations_online() -> None:
     from config import settings
     configuration = config.get_section(config.config_ini_section, {})
     url = settings.database_url_sync or config.get_main_option("sqlalchemy.url")
+    if url and url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     configuration["sqlalchemy.url"] = url
     
     connectable = engine_from_config(
