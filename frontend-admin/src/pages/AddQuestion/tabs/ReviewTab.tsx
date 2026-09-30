@@ -16,7 +16,12 @@ export function ReviewTab({ questionId, onBack, onPublish }: { questionId: strin
       
       if (res.data.last_validation_results) {
         try {
-          setResults(JSON.parse(res.data.last_validation_results));
+          const parsed = JSON.parse(res.data.last_validation_results);
+          if (parsed && parsed.run_1) {
+            setResults(parsed.run_1);
+          } else {
+            setResults(Array.isArray(parsed) ? parsed : []);
+          }
         } catch (e) {
           console.error("Failed to parse last validation results", e);
         }

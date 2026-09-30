@@ -142,13 +142,15 @@ def _run_with_hard_timeout(html: str, css: str, js: str, assertions: list[dict],
         process.join(3)
         if process.is_alive() and hasattr(process, "kill"):
             process.kill()
-            process.join()
-        raise TimeoutError(f"Playwright evaluation exceeded {SUBMISSION_TIMEOUT_SECONDS} seconds")
+            
+        queue.cancel_join_thread()
+        raise RuntimeError(f"Playwright evaluation exceeded {SUBMISSION_TIMEOUT_SECONDS} seconds. Fix your reference code.")
     try:
         ok, payload = queue.get(timeout=1)
     except Empty as exc:
         raise RuntimeError(f"Playwright worker exited with code {process.exitcode}") from exc
     finally:
+        queue.cancel_join_thread()
         queue.close()
     if not ok:
         raise RuntimeError(payload)
