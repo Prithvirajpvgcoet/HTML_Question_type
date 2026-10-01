@@ -43,3 +43,5 @@ async def webhook_stub(payload: dict):
     print(f"Received webhook: {payload}")
     return {"status": "received"}
 
+
+# Last forced rebuild: 2026-10-01 12:16:00
