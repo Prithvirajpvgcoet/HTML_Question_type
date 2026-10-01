@@ -108,7 +108,7 @@ export function QuestionsList() {
               </tr>
             </thead>
             <tbody className="divide-y">
-              {questions.map((q: any) => (
+              {Array.isArray(questions) ? questions.map((q: any) => (
                 <tr key={q.id} className="hover:bg-gray-50">
                   <td className="p-4 font-medium text-gray-800">
                     <button
@@ -133,7 +133,13 @@ export function QuestionsList() {
                     </div>
                   </td>
                 </tr>
-              ))}
+              )) : (
+                <tr>
+                  <td colSpan={4} className="p-4 text-center text-red-500 font-medium">
+                    Backend connection error. Ensure your local backend is running and VITE_API_BASE_URL is correct.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
