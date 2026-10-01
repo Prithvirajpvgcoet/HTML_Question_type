@@ -9,9 +9,7 @@ RUN npm install --legacy-peer-deps
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine
-COPY --from=build /app/dist /usr/share/nginx/html
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
-EXPOSE 80
-ENTRYPOINT ["/entrypoint.sh"]
+FROM node:22-alpine
+RUN npm install -g serve
+COPY --from=build /app/dist /app/dist
+CMD sh -c "serve -s /app/dist -l tcp://0.0.0.0:${PORT:-3000}"
