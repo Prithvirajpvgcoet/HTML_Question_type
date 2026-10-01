@@ -32,6 +32,7 @@ app.include_router(analytics_router, prefix="/api/v1/analytics", tags=["Analytic
 app.include_router(invites_router, prefix="/api/v1/invites", tags=["Invites"])
 
 
+# Health check endpoint
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "imocha-ai-eval", "version": "0.2.0"}
@@ -41,3 +42,4 @@ async def webhook_stub(payload: dict):
     # Dummy endpoint to receive evaluation completion webhooks
     print(f"Received webhook: {payload}")
     return {"status": "received"}
+
