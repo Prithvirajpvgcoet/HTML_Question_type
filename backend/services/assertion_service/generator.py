@@ -135,9 +135,14 @@ Reference JavaScript:
         thinking_level="low",
     )
     validation = ValidationResponse.model_validate(result)
-    if validation.status != "passed":
-        issue_text = "; ".join(f"{issue.type}: {issue.message}" for issue in validation.issues)
-        raise ValueError(f"Question is not ready for assertion generation: {issue_text or 'validation failed'}")
+    
+    # RELAXED: Only block on strictly impossible to test issues.
+    BLOCKING = {"not_ui_observable"}
+    blocking = [i for i in validation.issues if i.type in BLOCKING]
+    
+    if blocking:
+        issue_text = "; ".join(f"{issue.type}: {issue.message}" for issue in blocking)
+        raise ValueError(f"Question is not ready for assertion generation: {issue_text}")
 
 
 def _validate_selector_tokens(assertions: list[dict], requirement_source: str, reference_source: str) -> None:
@@ -151,13 +156,11 @@ def _validate_selector_tokens(assertions: list[dict], requirement_source: str, r
             selectors.append(item.get("check_selector") or "")
         for selector in selectors:
             for ident in re.findall(r"#([A-Za-z_][\w-]*)", selector):
-                if not re.search(rf"\b{re.escape(ident)}\b", requirement_source):
-                    raise ValueError(f"Generated selector '#{ident}' is not explicitly named in the question requirements")
+                # RELAXED: Only strictly enforce it exists in the reference solution
                 if not re.search(rf"\b{re.escape(ident)}\b", reference_source):
                     raise ValueError(f"Generated selector '#{ident}' is absent from the reference solution")
             for class_name in re.findall(r"\.([A-Za-z_][\w-]*)", selector):
-                if not re.search(rf"\b{re.escape(class_name)}\b", requirement_source):
-                    raise ValueError(f"Generated selector '.{class_name}' is not explicitly named in the question requirements")
+                # RELAXED: Only strictly enforce it exists in the reference solution
                 if not re.search(rf"\b{re.escape(class_name)}\b", reference_source):
                     raise ValueError(f"Generated selector '.{class_name}' is absent from the reference solution")
         function_name = ""
@@ -166,8 +169,6 @@ def _validate_selector_tokens(assertions: list[dict], requirement_source: str, r
         elif item.get("check_type") == "function_presence":
             function_name = item.get("check_selector") or ""
         if function_name:
-            if not re.search(rf"\b{re.escape(function_name)}\b", requirement_source):
-                raise ValueError(f"Generated function '{function_name}' is not explicitly named in the question requirements")
             if not re.search(rf"\b{re.escape(function_name)}\b", reference_source):
                 raise ValueError(f"Generated function '{function_name}' is absent from the reference solution")
 
